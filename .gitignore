@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+runs/
+*.pt
+*.onnx
+*.safetensors
+OmniParser/
+screen_element_scanner/output/
+hackathon_ui_operator_distill/data/raw_screenshots/*.png
+hackathon_ui_operator_distill/data/raw_screenshots/*.jpg
+hackathon_ui_operator_distill/data/raw_screenshots/*.jpeg
+hackathon_ui_operator_distill/data/labels_teacher/*.json
+hackathon_ui_operator_distill/data/yolo_dataset/images/
+hackathon_ui_operator_distill/data/yolo_dataset/labels/
