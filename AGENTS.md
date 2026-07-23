@@ -1345,3 +1345,30 @@ python .\screen_element_scanner\scan_screen.py --quiet
 ```
 
 Note: timed-out test runs left stale Python processes holding SQLite locks during development. They were stopped before the final successful test run.
+
+## 2026-07-23 Real Runtime Pipeline
+
+The model/tool runtime is now wired into `AgentRouter`.
+
+Implemented:
+
+- `app/runtime/resource_budget.py`: measures available RAM and creates a model-loading budget.
+- `app/runtime/io_pool.py`: shared 2-worker I/O thread pool for blocking disk/model/tool work.
+- `app/runtime/model_registry.py`: lazy model registry with async prefetch, idle unload, and placeholder loaders.
+- `app/runtime/heatmap.py`: intent-to-tool heat map persisted under runtime memory.
+- `app/runtime/tier_manager.py`: RAM-aware tier decisions for resident, OCR, detector, and local LLM modes.
+- `AgentRouter` now measures RAM, classifies intent, starts risk assessment, decides tiers, prefetches hot models/tools, records tool heat, and unloads idle resources.
+- Browser/Auth tools expose safe `prepare()` warmups that import dependencies without launching Chromium or unlocking vaults.
+- `/runtime` endpoint reports current budget, model mode, registered models, loaded models, and pending model prefetches.
+
+Current lazy model names:
+
+```text
+ocr-mobile
+ui-detector-int8
+qwen-1.5b-q4
+vault-crypto
+browser-warmup
+```
+
+These are placeholders until actual OCR/YOLO/GGUF artifacts are downloaded. Do not block the event loop while adding real loaders; use `ModelRegistry` + `IOPool`.

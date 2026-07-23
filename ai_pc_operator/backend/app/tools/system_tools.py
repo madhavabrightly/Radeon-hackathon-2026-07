@@ -6,6 +6,7 @@ import psutil
 import platform
 import subprocess
 import shutil
+import time
 from typing import Dict, Any, List
 
 
@@ -36,7 +37,7 @@ class SystemTools:
             ),
             "boot_time": psutil.boot_time(),
             "uptime_seconds": (
-                psutil.time.time() - psutil.boot_time()
+                time.time() - psutil.boot_time()
             ),
         }
 

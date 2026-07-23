@@ -137,6 +137,25 @@ async def test_redactor():
     print(f"[ok] Dict redacted: {redacted_dict}")
 
 
+async def test_runtime_pipeline():
+    """Test RAM budget, heat map, and tier decisions."""
+    from app.runtime.heatmap import ToolHeatMap
+    from app.runtime.resource_budget import ResourceBudget
+    from app.runtime.tier_manager import AgentTierManager
+
+    print("\nTesting runtime pipeline...")
+    budget = ResourceBudget().measure()
+    print(f"[ok] Runtime mode: {budget.mode}, model budget MB: {budget.model_budget_mb}")
+
+    heatmap = ToolHeatMap()
+    heatmap.record_plan("search_web", [{"tool": "browser.search", "args": {}}])
+    hot_models = heatmap.hot_models_for_intent("search_web")
+    print(f"[ok] Hot models for search_web: {hot_models}")
+
+    decision = AgentTierManager().decide("search_web", budget, hot_models)
+    print(f"[ok] Tier decision: {decision.tier} ({decision.reason})")
+
+
 async def main():
     """Run all tests."""
     from app.db.database import close_db
@@ -152,6 +171,7 @@ async def main():
         await test_permissions()
         await test_vault()
         await test_redactor()
+        await test_runtime_pipeline()
 
         print("\n" + "=" * 60)
         print("All tests passed! [ok]")

@@ -38,6 +38,17 @@ class BrowserTools:
                 )
         self.last_used = time.monotonic()
 
+    async def prepare(self) -> Dict[str, Any]:
+        """Warm import Playwright without launching Chromium."""
+        try:
+            await asyncio.to_thread(__import__, "playwright.async_api")
+            return {"status": "success", "prepared": "playwright-import"}
+        except ImportError:
+            return {
+                "status": "skipped",
+                "reason": "Playwright is not installed",
+            }
+
     async def unload_idle(self) -> None:
         """Close Chromium after idle timeout to free 400MB+ on small machines."""
         if not self.browser:

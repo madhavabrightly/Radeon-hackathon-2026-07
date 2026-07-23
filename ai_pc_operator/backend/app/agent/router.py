@@ -20,6 +20,11 @@ from app.tools.file_tools import FileTools
 from app.tools.browser_tools import BrowserTools
 from app.tools.auth_tools import AuthTools
 from app.db.database import db_session
+from app.runtime.heatmap import ToolHeatMap
+from app.runtime.io_pool import IOPool
+from app.runtime.model_registry import ModelRegistry, ModelSpec, placeholder_loader
+from app.runtime.resource_budget import ResourceBudget
+from app.runtime.tier_manager import AgentTierManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,12 @@ class AgentRouter:
         self.risk_classifier = RiskClassifier()
         self.permission_engine = PermissionEngine()
         self.approval_manager = approval_manager
+        self.resource_budget = ResourceBudget()
+        self.io_pool = IOPool(max_workers=2)
+        self.model_registry = ModelRegistry(self.resource_budget, self.io_pool)
+        self.heatmap = ToolHeatMap()
+        self.tier_manager = AgentTierManager()
+        self._register_lazy_models()
 
         # Tool registry
         self.tools = {
@@ -51,6 +62,29 @@ class AgentRouter:
         }
 
         self.emergency_stopped = False
+
+    def _register_lazy_models(self) -> None:
+        """Register lazy model placeholders for RAM-aware prefetch."""
+        self.model_registry.register(
+            ModelSpec("ocr-mobile", 160, placeholder_loader("ocr-mobile"))
+        )
+        self.model_registry.register(
+            ModelSpec("ui-detector-int8", 350, placeholder_loader("ui-detector-int8"))
+        )
+        self.model_registry.register(
+            ModelSpec(
+                "qwen-1.5b-q4",
+                1200,
+                placeholder_loader("qwen-1.5b-q4"),
+                idle_ttl_sec=300,
+            )
+        )
+        self.model_registry.register(
+            ModelSpec("vault-crypto", 64, placeholder_loader("vault-crypto"))
+        )
+        self.model_registry.register(
+            ModelSpec("browser-warmup", 128, placeholder_loader("browser-warmup"))
+        )
 
     async def process_command(
         self,
@@ -82,13 +116,25 @@ class AgentRouter:
         command_id = await self._save_command(text, device_id)
 
         try:
-            # Step 2: Classify intent
+            # Step 2: classify intent while a RAM snapshot runs off-loop.
+            budget_task = asyncio.create_task(
+                asyncio.to_thread(self.resource_budget.measure)
+            )
             intent = await self.planner.classify_intent(text)
+            budget = await budget_task
             logger.info(f"Intent: {intent}")
 
-            # Step 3: Assess risk
-            risk_level = await self.risk_classifier.assess(text, intent)
+            # Step 3: assess risk while runtime tiers/prefetch are decided.
+            risk_task = asyncio.create_task(
+                self.risk_classifier.assess(text, intent)
+            )
+            hot_models = self.heatmap.hot_models_for_intent(intent)
+            tier_decision = self.tier_manager.decide(intent, budget, hot_models)
+            self.model_registry.prefetch(tier_decision.prefetch_models)
+            self._prefetch_hot_tools(self.heatmap.hot_tools(intent), budget.model_budget_mb)
+            risk_level = await risk_task
             logger.info(f"Risk level: {risk_level}")
+            logger.info(f"Tier decision: {tier_decision}")
 
             # Step 4: Check permissions
             requires_approval = self.permission_engine.requires_approval(
@@ -124,6 +170,7 @@ class AgentRouter:
             # Step 6: Plan actions
             plan = await self.planner.create_plan(text, intent)
             logger.info(f"Plan: {plan}")
+            self.heatmap.record_plan(intent, plan.get("steps", []))
 
             # Step 7: Execute tools
             results = []
@@ -146,6 +193,7 @@ class AgentRouter:
                 "status": "completed" if verified else "partial",
                 "result": self._format_results(results),
                 "requires_approval": requires_approval,
+                "runtime": tier_decision.to_dict(),
             }
 
             await self._update_command_status(
@@ -156,6 +204,7 @@ class AgentRouter:
 
             # Save to memory
             await self.memory.add(text, intent, response)
+            await self._maintenance()
 
             return response
 
@@ -169,6 +218,8 @@ class AgentRouter:
                 "status": "failed",
                 "error": str(e),
             }
+        finally:
+            await self._maintenance()
 
     async def _execute_tool(
         self,
@@ -203,7 +254,7 @@ class AgentRouter:
             if asyncio.iscoroutinefunction(method_func):
                 result = await method_func(**args)
             else:
-                result = method_func(**args)
+                result = await self.io_pool.run(method_func, **args)
 
             # Log action
             await self._log_action(
@@ -324,3 +375,31 @@ class AgentRouter:
         browser_tools = self.tools.get("browser")
         if browser_tools and hasattr(browser_tools, "close"):
             await browser_tools.close()
+        await self.model_registry.shutdown()
+        self.io_pool.shutdown()
+
+    async def _maintenance(self) -> None:
+        """Unload idle heavy resources between commands."""
+        browser_tools = self.tools.get("browser")
+        if browser_tools and hasattr(browser_tools, "unload_idle"):
+            await browser_tools.unload_idle()
+        self.model_registry.unload_idle()
+
+    def _prefetch_hot_tools(self, tool_names: list[str], model_budget_mb: int) -> None:
+        """Warm safe tool dependencies from heat-map predictions."""
+        if model_budget_mb < 128:
+            return
+
+        categories = []
+        for tool_name in tool_names:
+            if "." in tool_name:
+                category, _ = tool_name.split(".", 1)
+                categories.append(category)
+
+        for category in dict.fromkeys(categories):
+            tool = self.tools.get(category)
+            prepare = getattr(tool, "prepare", None)
+            if not prepare:
+                continue
+            if asyncio.iscoroutinefunction(prepare):
+                asyncio.create_task(prepare())

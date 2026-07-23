@@ -1,5 +1,72 @@
 # Screen-AI Run Change Log
 
+## 2026-07-23 23:41:06 +05:30
+
+Purpose: start the real RAM-aware model/tool runtime pipeline requested for Screen-AI.
+
+### Runtime Core
+
+- Added `ai_pc_operator/backend/app/runtime/`.
+- Added RAM-aware startup/runtime budget:
+  - measures available memory
+  - caps model budget
+  - exposes `tier0-only`, `ocr-only`, `perception-only`, and `balanced` modes
+- Added shared I/O thread pool for blocking disk/model/tool work.
+- Added lazy `ModelRegistry` with async prefetch and idle unload.
+- Added `ToolHeatMap` to learn which tools follow which intents.
+- Added `AgentTierManager` to produce tier decisions from intent + RAM budget + heat map.
+
+### AgentRouter Integration
+
+- `AgentRouter` now creates:
+  - `ResourceBudget`
+  - `IOPool`
+  - `ModelRegistry`
+  - `ToolHeatMap`
+  - `AgentTierManager`
+- Command flow now:
+  - saves command
+  - measures RAM off-loop while classifying intent
+  - assesses risk while tier decision and prefetch run
+  - records tool heat map after planning
+  - executes sync tools through I/O pool
+  - unloads idle resources after each command
+- Response now includes a `runtime` block with the tier decision.
+
+### Prefetch And Hot Tools
+
+- Registered lazy placeholder model names:
+  - `ocr-mobile`
+  - `ui-detector-int8`
+  - `qwen-1.5b-q4`
+  - `vault-crypto`
+  - `browser-warmup`
+- Added safe tool prefetch:
+  - browser warmup imports Playwright only, does not launch Chromium
+  - auth warmup imports cryptography only, does not unlock vault
+
+### API
+
+- Added:
+
+```text
+GET /runtime
+```
+
+Returns:
+
+- available RAM
+- model budget
+- runtime mode
+- OCR/detector/LLM allowance
+- registered/loaded/loading models
+
+### Notes
+
+- Real model artifacts are not downloaded yet.
+- The pipeline is ready for real PaddleOCR, YOLO ONNX, and GGUF loaders.
+- All heavy loaders must go through `ModelRegistry` and `IOPool`, not direct event-loop imports.
+
 ## 2026-07-23 17:03:33 +05:30
 
 Purpose: fine-tune Screen-AI for low-memory 4 GB laptop operation using the review notes in the attached text file.
@@ -94,4 +161,3 @@ All passed.
 
 - Earlier timed-out test runs left stale Python processes holding the SQLite DB lock. Those processes were stopped before the final successful smoke test.
 - `aiosqlite==0.19.0` was installed locally to run the backend smoke test.
-

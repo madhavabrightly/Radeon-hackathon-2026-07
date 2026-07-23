@@ -14,6 +14,22 @@ class AuthTools:
         """Initialize auth tools."""
         self.vault = PasswordVault()
 
+    async def prepare(self) -> Dict[str, Any]:
+        """Warm cryptography imports without unlocking the vault."""
+        try:
+            import asyncio
+
+            await asyncio.to_thread(
+                __import__,
+                "cryptography.hazmat.primitives.ciphers.aead",
+            )
+            return {"status": "success", "prepared": "cryptography-import"}
+        except ImportError:
+            return {
+                "status": "failed",
+                "error": "cryptography is not installed",
+            }
+
     async def vault_unlock(self, master_password: str) -> Dict[str, Any]:
         """Unlock the password vault."""
         try:

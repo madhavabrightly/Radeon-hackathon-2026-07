@@ -149,6 +149,30 @@ async def status():
     return await system_tools.get_status()
 
 
+@app.get("/runtime")
+async def runtime_status():
+    """Runtime budget and lazy model status."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+
+    budget = agent_router.resource_budget.measure()
+    return {
+        "memory": {
+            "available_mb": budget.available_mb,
+            "model_budget_mb": budget.model_budget_mb,
+            "mode": budget.mode,
+            "allow_ocr": budget.allow_ocr,
+            "allow_detector": budget.allow_detector,
+            "allow_llm": budget.allow_llm,
+        },
+        "models": {
+            "registered": list(agent_router.model_registry.specs),
+            "loaded": list(agent_router.model_registry.loaded),
+            "loading": list(agent_router.model_registry.loading),
+        },
+    }
+
+
 @app.post("/pair")
 async def pair(request: PairingRequest):
     """Pair a new device with pairing code."""

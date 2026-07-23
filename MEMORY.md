@@ -390,6 +390,45 @@ Operational note:
 
 If smoke tests time out while using the shared DB, check for stale Python processes holding SQLite locks and stop them before rerunning.
 
-**Last Updated**: 2026-07-23 17:03:33 +05:30
-**Version**: 1.1.0
+## Latest Run Memory: 2026-07-23 23:41:06 +05:30
+
+Focus: start the real model/tool runtime pipeline.
+
+Implemented:
+
+- Added backend runtime package:
+  - `app/runtime/resource_budget.py`
+  - `app/runtime/io_pool.py`
+  - `app/runtime/model_registry.py`
+  - `app/runtime/heatmap.py`
+  - `app/runtime/tier_manager.py`
+- `AgentRouter` now wires TierManager into real command processing.
+- RAM budget is measured at command start.
+- Intent classification overlaps with memory measurement.
+- Risk assessment overlaps with tier decision and async prefetch.
+- Tool heat map records tools used by each intent.
+- Hot models/tools can be prefetched without blocking the event loop.
+- Sync tools execute through the shared I/O thread pool.
+- Browser and auth tools gained safe `prepare()` methods.
+- Added `/runtime` endpoint for RAM/model status.
+
+Current model registry uses placeholders:
+
+```text
+ocr-mobile
+ui-detector-int8
+qwen-1.5b-q4
+vault-crypto
+browser-warmup
+```
+
+Next work:
+
+- Replace placeholders with real PaddleOCR/ONNX/GGUF lazy loaders.
+- Add model download script and local model manifest.
+- Add click-by-text endpoint into `ai_pc_operator`.
+- Add runtime tests around `AgentRouter.process_command()`.
+
+**Last Updated**: 2026-07-23 23:41:06 +05:30
+**Version**: 1.2.0
 **Maintainer**: Screen-AI Team
