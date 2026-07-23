@@ -1454,3 +1454,34 @@ qwen-1.5b-q4: not staged
 vault-crypto: dependency loader available
 browser-warmup: dependency loader available
 ```
+
+## 2026-07-24 Login V2 Repair
+
+Enhanced pairing is additive; do not remove the legacy 6-digit code flow.
+
+Working login layers:
+
+- 6-digit code pairing remains the reliable fallback.
+- QR pairing uses short-lived pairing sessions from `/pair/qr`.
+- Trusted reconnect uses `/pair/trusted`.
+- Token rotation uses `/auth/rotate`.
+- Biometric challenge endpoints exist for future sensitive-action gates.
+
+Important implementation notes:
+
+- `pairing_manager_v2` must be declared global in FastAPI lifespan.
+- QR pairing private keys are intentionally in-memory only; if the backend restarts, generate a new QR session.
+- MVP pairing returns a normal local session token so unsupported mobile WebCrypto/X25519 cannot block login.
+- Encrypted token fields may be present when a valid X25519 key is supplied, but the frontend should not require them yet.
+- `remote/index.html`, `frontend/app.js`, and `frontend/styles.css` must agree on `login-screen` IDs.
+- `test_login_v2.py` must close the shared DB connection or it can leave a stale Python process.
+
+Verified endpoints:
+
+```text
+GET /pair/qr
+GET /pair/code
+POST /pair/qr/complete
+POST /auth/rotate
+POST /pair/trusted
+```

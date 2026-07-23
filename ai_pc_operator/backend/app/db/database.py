@@ -84,10 +84,14 @@ CREATE TABLE IF NOT EXISTS devices (
     token_hash TEXT NOT NULL,
     paired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_seen TIMESTAMP,
-    active INTEGER DEFAULT 1
+    active INTEGER DEFAULT 1,
+    trust_until TIMESTAMP,
+    device_public_key TEXT,
+    biometric_key_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_devices_active ON devices(active);
+CREATE INDEX IF NOT EXISTS idx_devices_trust ON devices(trust_until);
 
 -- Vault entries (encrypted credentials)
 CREATE TABLE IF NOT EXISTS vault_entries (
@@ -139,7 +143,7 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Pairing codes table
+-- Pairing codes table (legacy 6-digit fallback)
 CREATE TABLE IF NOT EXISTS pairing_codes (
     code TEXT PRIMARY KEY,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -148,6 +152,41 @@ CREATE TABLE IF NOT EXISTS pairing_codes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_codes(expires_at);
+
+-- QR pairing sessions (new, primary method)
+CREATE TABLE IF NOT EXISTS pairing_sessions (
+    id TEXT PRIMARY KEY,
+    public_key TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    used INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_pairing_sessions_expires ON pairing_sessions(expires_at);
+
+-- Biometric challenges (Windows Hello / phone biometric)
+CREATE TABLE IF NOT EXISTS biometric_challenges (
+    id TEXT PRIMARY KEY,
+    device_id TEXT,
+    challenge TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    used INTEGER DEFAULT 0,
+    FOREIGN KEY (device_id) REFERENCES devices(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_biometric_expires ON biometric_challenges(expires_at);
+
+-- Token rotation history (audit trail)
+CREATE TABLE IF NOT EXISTS token_rotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    rotated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    reason TEXT,  -- 'scheduled', 'manual', 'suspicious'
+    FOREIGN KEY (device_id) REFERENCES devices(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_token_rotations_device ON token_rotations(device_id);
 """
 
 
@@ -155,9 +194,39 @@ async def init_db() -> None:
     """Initialize database with schema."""
     db = await get_db()
     async with _DB_LOCK:
+        # Migrate first (for existing DBs without new columns)
+        await _migrate_devices(db)
+        # Then create schema (idempotent CREATE IF NOT EXISTS)
         await db.executescript(SCHEMA)
         await db.commit()
     print(f"Database initialized at {DB_PATH}")
+
+
+async def _migrate_devices(db: aiosqlite.Connection) -> None:
+    """Add new columns to devices table if missing (idempotent)."""
+    # Check if devices table exists first
+    cursor = await db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='devices'"
+    )
+    row = await cursor.fetchone()
+    if not row:
+        # Table doesn't exist yet - schema will create it with all columns
+        return
+
+    cursor = await db.execute("PRAGMA table_info(devices)")
+    cols = {row[1] for row in await cursor.fetchall()}
+
+    migrations = [
+        ("trust_until", "ALTER TABLE devices ADD COLUMN trust_until TIMESTAMP"),
+        ("device_public_key", "ALTER TABLE devices ADD COLUMN device_public_key TEXT"),
+        ("biometric_key_id", "ALTER TABLE devices ADD COLUMN biometric_key_id TEXT"),
+    ]
+
+    for col_name, sql in migrations:
+        if col_name not in cols:
+            await db.execute(sql)
+
+    await db.commit()
 
 
 async def get_db() -> aiosqlite.Connection:

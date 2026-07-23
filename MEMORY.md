@@ -543,3 +543,55 @@ browser-warmup: no artifact required
 **Last Updated**: 2026-07-24 00:19:07 +05:30
 **Version**: 1.3.0
 **Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-24 01:50:32 +05:30
+
+Focus: repair the enhanced mobile/PC login flow and stop the stuck test process.
+
+Problems found:
+
+- A stale `python -u ai_pc_operator/backend/test_login_v2.py` process was still running.
+- `test_login_v2.py` did not close the shared SQLite connection.
+- FastAPI lifespan did not declare `pairing_manager_v2` as global, so V2 endpoints could stay unavailable.
+- `/remote/index.html` still used the old `pairing-screen` DOM while `app.js` expected `login-screen`.
+- Frontend QR flow depended on browser X25519 WebCrypto support.
+- Trusted reconnect returned a token but frontend did not save it.
+- QR completion had a bad DB fallback path when the in-memory private key was gone.
+
+Changed:
+
+- Stopped the stale Python process.
+- Added DB shutdown to `test_login_v2.py`.
+- Fixed FastAPI V2 manager initialization.
+- Aligned `index.html` with the enhanced login UI.
+- Kept the 6-digit code flow as reliable fallback.
+- Made QR scanner fail gracefully when camera/jsQR is unavailable.
+- Removed frontend dependency on X25519 for MVP pairing.
+- QR pairing and trusted reconnect now return/store usable local session tokens.
+- Token rotation records an audit row.
+
+Verification:
+
+```text
+py_compile: pass
+node --check frontend/app.js: pass
+test_login_v2.py: pass
+test_basic.py: pass
+/pair/qr: pass
+/pair/code: pass
+/remote/index.html: pass
+/pair/qr/complete: pass
+/auth/rotate: pass
+/pair/trusted: pass
+```
+
+Current server:
+
+```text
+localhost:8000
+PID seen during verification: 22372
+```
+
+**Last Updated**: 2026-07-24 01:50:32 +05:30
+**Version**: 1.3.1
+**Maintainer**: Screen-AI Team

@@ -1,5 +1,48 @@
 # Screen-AI Run Change Log
 
+## 2026-07-24 01:50:32 +05:30
+
+Purpose: repair the enhanced mobile/PC login implementation that was left hanging by the previous run.
+
+### Fixed Hanging Test
+
+- Stopped stale `test_login_v2.py` Python processes.
+- Updated `test_login_v2.py` to close the shared SQLite connection after completion.
+- Verified the login V2 test completes under a hard timeout instead of running indefinitely.
+
+### Backend Pairing V2
+
+- Fixed FastAPI lifespan global state so `pairing_manager_v2` is actually initialized.
+- Fixed QR pairing completion when the in-memory private key is missing after restart.
+- Committed QR session `used` updates immediately.
+- `trust_device()` now reports false when no active device was updated.
+- QR pairing now returns a normal local session token for the MVP flow, while keeping encrypted token metadata when possible.
+- Trusted reconnect now returns a usable token that the frontend can store.
+- Token rotation now records an audit row in `token_rotations`.
+
+### Frontend Login
+
+- Updated `remote/index.html` to use the new `login-screen` DOM expected by `app.js`.
+- Kept 6-digit code pairing as the reliable fallback.
+- QR scan now fails gracefully if camera APIs or the QR library are unavailable.
+- Removed dependency on browser X25519 WebCrypto support for MVP pairing.
+- Trusted reconnect now calls `saveSession()` with the returned token.
+
+### Verification
+
+```text
+python -m py_compile pairing_v2.py database.py main.py test_login_v2.py : pass
+node --check frontend/app.js : pass
+python -u ai_pc_operator/backend/test_login_v2.py : pass
+python -u ai_pc_operator/backend/test_basic.py : pass
+GET /pair/qr : pass
+GET /pair/code : pass
+GET /remote/index.html : pass
+POST /pair/qr/complete : pass
+POST /auth/rotate : pass
+POST /pair/trusted : pass
+```
+
 ## 2026-07-24 00:19:07 +05:30
 
 Purpose: address the five missing runtime integrations: model placeholders, unused prompts, missing artifact discovery, unwired screen cache, and unused log redaction.

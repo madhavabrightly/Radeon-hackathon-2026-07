@@ -22,6 +22,7 @@ from typing import Optional
 from app.db.database import init_db, db_session, close_db
 from app.agent.router import AgentRouter
 from app.security.pairing import PairingManager
+from app.security.pairing_v2 import PairingManagerV2
 from app.approvals.manager import ApprovalManager
 from app.tools.system_tools import SystemTools
 from app.tools.file_tools import FileTools
@@ -66,13 +67,14 @@ logger = logging.getLogger("ai_pc_operator")
 # Global state
 agent_router: Optional[AgentRouter] = None
 pairing_manager: Optional[PairingManager] = None
+pairing_manager_v2: Optional[PairingManagerV2] = None
 approval_manager: Optional[ApprovalManager] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global agent_router, pairing_manager, approval_manager
+    global agent_router, pairing_manager, pairing_manager_v2, approval_manager
 
     logger.info("Starting AI PC Operator...")
 
@@ -81,6 +83,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize managers
     pairing_manager = PairingManager()
+    pairing_manager_v2 = PairingManagerV2()
     approval_manager = ApprovalManager()
 
     # Initialize agent router
@@ -147,6 +150,37 @@ class PairingRequest(BaseModel):
     """Pairing code from mobile."""
     code: str
     device_name: str
+
+
+class QRPairingCompleteRequest(BaseModel):
+    """Complete QR pairing after phone scans code."""
+    pairing_id: str
+    device_public_key: str
+    device_name: str
+    trust_device: bool = False
+
+
+class TrustedRePairRequest(BaseModel):
+    """Auto re-pair a trusted device."""
+    device_id: str
+    device_public_key: str
+
+
+class TokenRotateRequest(BaseModel):
+    """Rotate session token."""
+    device_id: str
+    old_token: str
+
+
+class BiometricChallengeRequest(BaseModel):
+    """Request a biometric challenge."""
+    device_id: str
+
+
+class BiometricVerifyRequest(BaseModel):
+    """Verify a biometric challenge response."""
+    challenge_id: str
+    response: str
 
 
 # REST API endpoints
@@ -218,6 +252,137 @@ async def get_pairing_code():
 
     code = await pairing_manager.generate_code()
     return {"code": code, "expires_in": 300}  # 5 minutes
+
+
+# ============================================================
+# Enhanced Pairing Endpoints (QR + Trust + Rotation + Biometric)
+# These are additive - the 6-digit code flow still works.
+# ============================================================
+
+@app.get("/pair/qr")
+async def create_qr_pairing():
+    """Create a new QR code pairing session.
+
+    Returns QR data that the phone can scan for instant pairing
+    (no typing required). Falls back to 6-digit code if QR not used.
+    """
+    if not pairing_manager_v2:
+        raise HTTPException(status_code=503, detail="Server not ready")
+
+    pairing = await pairing_manager_v2.create_qr_pairing()
+    return pairing
+
+
+@app.post("/pair/qr/complete")
+async def complete_qr_pairing(request: QRPairingCompleteRequest):
+    """Complete QR pairing after phone scans the code.
+
+    Phone sends its X25519 public key. PC derives shared secret,
+    encrypts the session token, and returns it.
+    """
+    if not pairing_manager_v2:
+        raise HTTPException(status_code=503, detail="Server not ready")
+
+    result = await pairing_manager_v2.complete_qr_pairing(
+        pairing_id=request.pairing_id,
+        device_public_key=request.device_public_key,
+        device_name=request.device_name,
+        trust_device=request.trust_device,
+    )
+
+    if not result:
+        raise HTTPException(status_code=401, detail="Invalid or expired pairing")
+
+    return result
+
+
+@app.post("/pair/trust")
+async def trust_device(device_id: str, days: int = 30):
+    """Mark a device as trusted for N days.
+
+    Trusted devices can re-pair automatically without entering a code.
+    """
+    if not pairing_manager_v2:
+        raise HTTPException(status_code=503, detail="Server not ready")
+
+    success = await pairing_manager_v2.trust_device(device_id, days)
+    return {"trusted": success, "trust_days": days}
+
+
+@app.post("/pair/trusted")
+async def auto_repair_trusted(request: TrustedRePairRequest):
+    """Auto re-pair a trusted device without code entry.
+
+    Phone sends its device_id and public_key. If device is trusted,
+    PC issues a new encrypted session token.
+    """
+    if not pairing_manager_v2:
+        raise HTTPException(status_code=503, detail="Server not ready")
+
+    result = await pairing_manager_v2.auto_repair_trusted(
+        device_id=request.device_id,
+        device_public_key=request.device_public_key,
+    )
+
+    if not result:
+        raise HTTPException(status_code=401, detail="Device not trusted")
+
+    return result
+
+
+@app.post("/auth/rotate")
+async def rotate_token(request: TokenRotateRequest):
+    """Rotate a device's session token.
+
+    Issues a new token and invalidates the old one.
+    Should be called periodically (every 24h) or on suspicious activity.
+    """
+    if not pairing_manager_v2:
+        raise HTTPException(status_code=503, detail="Server not ready")
+
+    new_token = await pairing_manager_v2.rotate_token(
+        device_id=request.device_id,
+        old_token=request.old_token,
+    )
+
+    if not new_token:
+        raise HTTPException(status_code=401, detail="Invalid old token")
+
+    return {"rotated": True, "new_token": new_token}
+
+
+@app.post("/auth/biometric/challenge")
+async def create_biometric_challenge(request: BiometricChallengeRequest):
+    """Create a biometric challenge for sensitive operations.
+
+    Used for vault unlock, not initial pairing.
+    Phone or PC must complete the challenge (Windows Hello,
+    Touch ID, Face ID) before the operation proceeds.
+    """
+    if not pairing_manager_v2:
+        raise HTTPException(status_code=503, detail="Server not ready")
+
+    challenge = await pairing_manager_v2.create_biometric_challenge(
+        device_id=request.device_id,
+    )
+    return challenge
+
+
+@app.post("/auth/biometric/verify")
+async def verify_biometric_challenge(request: BiometricVerifyRequest):
+    """Verify a biometric challenge response."""
+    if not pairing_manager_v2:
+        raise HTTPException(status_code=503, detail="Server not ready")
+
+    verified = await pairing_manager_v2.verify_biometric_challenge(
+        challenge_id=request.challenge_id,
+        response=request.response,
+    )
+
+    if not verified:
+        raise HTTPException(status_code=401, detail="Invalid or expired challenge")
+
+    return {"verified": True}
 
 
 @app.post("/command")

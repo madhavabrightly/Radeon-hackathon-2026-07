@@ -8,18 +8,26 @@
 </head>
 <body>
     <div id="app">
-        <!-- Login Screen -->
+        <!-- Login Screen with 3 methods -->
         <div id="login-screen" class="screen active">
             <div class="container">
                 <h1>Screen-AI</h1>
                 <p class="subtitle">Local AI PC Operator</p>
 
+                <!-- Method tabs -->
                 <div class="login-methods">
-                    <button class="method-tab active" data-method="qr">Scan QR</button>
-                    <button class="method-tab" data-method="code">Enter Code</button>
-                    <button class="method-tab" data-method="trusted">Trusted</button>
+                    <button class="method-tab active" data-method="qr">
+                        📷 Scan QR
+                    </button>
+                    <button class="method-tab" data-method="code">
+                        🔢 Enter Code
+                    </button>
+                    <button class="method-tab" data-method="trusted">
+                        ✓ Trusted
+                    </button>
                 </div>
 
+                <!-- QR Scan Method -->
                 <div id="qr-method" class="method-content active">
                     <div class="qr-scanner">
                         <div class="qr-frame">
@@ -27,14 +35,19 @@
                             <div class="qr-corner tr"></div>
                             <div class="qr-corner bl"></div>
                             <div class="qr-corner br"></div>
-                            <p class="qr-hint">Point camera at QR payload on PC</p>
+                            <p class="qr-hint">Point camera at QR code on PC</p>
                         </div>
-                        <button id="start-camera" class="primary-btn">Start Camera</button>
-                        <button id="stop-camera" class="secondary-btn hidden">Stop Camera</button>
+                        <button id="start-camera" class="primary-btn">
+                            📷 Start Camera
+                        </button>
+                        <button id="stop-camera" class="secondary-btn hidden">
+                            Stop Camera
+                        </button>
                     </div>
                     <div id="qr-status" class="status"></div>
                 </div>
 
+                <!-- Code Entry Method (fallback) -->
                 <div id="code-method" class="method-content">
                     <div class="code-form">
                         <p>Enter the 6-digit code shown on your PC:</p>
@@ -55,22 +68,27 @@
                             <input type="checkbox" id="trust-device">
                             <span>Trust this device for 30 days</span>
                         </label>
-                        <button id="pair-button" class="primary-btn">Pair Device</button>
+                        <button id="pair-button" class="primary-btn">
+                            Pair Device
+                        </button>
                         <p id="pair-error" class="error"></p>
                     </div>
                 </div>
 
+                <!-- Trusted Device Method -->
                 <div id="trusted-method" class="method-content">
                     <div class="trusted-form">
-                        <p>If this phone was paired and trusted before, reconnect without typing a code.</p>
-                        <button id="check-trusted" class="primary-btn">Check Trusted Status</button>
+                        <p>If you've paired this device before and marked it as trusted:</p>
+                        <button id="check-trusted" class="primary-btn">
+                            🔄 Check Trusted Status
+                        </button>
                         <div id="trusted-status" class="status"></div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Main Screen -->
+        <!-- Main Screen (same as before) -->
         <div id="main-screen" class="screen">
             <div class="header">
                 <h1>Screen-AI</h1>
@@ -91,7 +109,7 @@
                         id="command-text"
                         placeholder="Type a command...&#10;e.g., 'Check my storage'&#10;'Open Chrome'&#10;'Delete files in Downloads'"
                     ></textarea>
-                    <button id="send-command">Send</button>
+                    <button id="send-command" class="primary-btn">Send</button>
                 </div>
                 <div id="command-response" class="response"></div>
             </div>
@@ -121,18 +139,23 @@
                 </div>
                 <div class="setting">
                     <label>Trust Status:</label>
-                    <span id="trust-status-display">Not trusted</span>
+                    <span id="trust-status-display">Checking...</span>
                 </div>
                 <div class="setting">
                     <label>Token Expires:</label>
                     <span id="token-expiry-display">-</span>
                 </div>
-                <button id="rotate-token-btn" class="secondary-btn">Rotate Token Now</button>
-                <button id="unpair-button" class="danger-btn">Unpair Device</button>
+                <button id="rotate-token-btn" class="secondary-btn">
+                    🔄 Rotate Token Now
+                </button>
+                <button id="unpair-button" class="danger-btn">
+                    Unpair Device
+                </button>
             </div>
         </div>
     </div>
 
+    <!-- QR Scanner library (jsQR for QR code detection) -->
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
     <script src="app.js"></script>
 </body>
