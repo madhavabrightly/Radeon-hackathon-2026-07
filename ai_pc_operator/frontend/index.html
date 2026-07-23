@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Screen-AI Remote</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Pairing Screen -->
+        <div id="pairing-screen" class="screen active">
+            <div class="container">
+                <h1>Screen-AI</h1>
+                <p class="subtitle">Local AI PC Operator</p>
+
+                <div class="pairing-form">
+                    <h2>Pair Your Device</h2>
+                    <p>Enter the 6-digit code shown on your PC:</p>
+                    <input
+                        type="text"
+                        id="pairing-code"
+                        placeholder="000000"
+                        maxlength="6"
+                        pattern="[0-9]{6}"
+                    >
+                    <input
+                        type="text"
+                        id="device-name"
+                        placeholder="Device name (e.g., My Phone)"
+                    >
+                    <button id="pair-button">Pair Device</button>
+                    <p id="pair-error" class="error"></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Screen -->
+        <div id="main-screen" class="screen">
+            <div class="header">
+                <h1>Screen-AI</h1>
+                <button id="emergency-stop" class="emergency-btn">🛑 STOP</button>
+            </div>
+
+            <div class="tabs">
+                <button class="tab active" data-tab="command">Command</button>
+                <button class="tab" data-tab="approvals">Approvals</button>
+                <button class="tab" data-tab="history">History</button>
+                <button class="tab" data-tab="settings">Settings</button>
+            </div>
+
+            <!-- Command Tab -->
+            <div id="command-tab" class="tab-content active">
+                <div class="command-input">
+                    <textarea
+                        id="command-text"
+                        placeholder="Type a command...&#10;e.g., 'Check my storage'&#10;'Open Chrome'&#10;'Delete files in Downloads'"
+                    ></textarea>
+                    <button id="send-command">Send</button>
+                </div>
+                <div id="command-response" class="response"></div>
+            </div>
+
+            <!-- Approvals Tab -->
+            <div id="approvals-tab" class="tab-content">
+                <h2>Pending Approvals</h2>
+                <div id="approvals-list"></div>
+            </div>
+
+            <!-- History Tab -->
+            <div id="history-tab" class="tab-content">
+                <h2>Command History</h2>
+                <div id="history-list"></div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settings-tab" class="tab-content">
+                <h2>Settings</h2>
+                <div class="setting">
+                    <label>Device Name:</label>
+                    <span id="device-name-display"></span>
+                </div>
+                <div class="setting">
+                    <label>Device ID:</label>
+                    <span id="device-id-display"></span>
+                </div>
+                <button id="unpair-button" class="danger-btn">Unpair Device</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

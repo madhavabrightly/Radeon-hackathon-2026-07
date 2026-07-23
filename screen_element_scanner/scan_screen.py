@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -14,10 +16,15 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "output"
+CACHE = ROOT / ".screen_cache"
 
 
 def capture_screen() -> Image.Image:
     return pyautogui.screenshot()
+
+
+def image_hash(image: Image.Image) -> str:
+    return hashlib.sha256(image.tobytes()).hexdigest()[:24]
 
 
 def run_uia_scan(max_depth: int, max_elements: int) -> list[dict]:
@@ -194,12 +201,16 @@ def main() -> None:
     parser.add_argument("--max-elements", type=int, default=3000)
     parser.add_argument("--vision-limit", type=int, default=350)
     parser.add_argument("--quiet", action="store_true", help="Write files without printing element reports.")
+    parser.add_argument("--cache-ttl", type=int, default=2, help="Reuse identical screen maps within this many seconds.")
     args = parser.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)
+    CACHE.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     screenshot = capture_screen()
+    screen_key = image_hash(screenshot)
+    cache_path = CACHE / f"{screen_key}.json"
     screenshot_path = OUT / f"screen_{stamp}.png"
     overlay_path = OUT / f"overlay_{stamp}.png"
     json_path = OUT / f"elements_{stamp}.json"
@@ -209,6 +220,30 @@ def main() -> None:
     latest_clean_overlay_path = OUT / "latest_actionable_overlay.png"
 
     screenshot.save(screenshot_path)
+
+    if args.cache_ttl > 0 and cache_path.exists() and time.time() - cache_path.stat().st_mtime <= args.cache_ttl:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        payload["captured_at"] = stamp
+        payload["cache_hit"] = True
+        payload["files"] = {
+            "screenshot": str(screenshot_path),
+            "overlay": str(overlay_path),
+            "json": str(json_path),
+        }
+        all_elements = payload.get("elements", [])
+        json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        latest_json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        draw_overlay(screenshot, all_elements, overlay_path)
+        draw_overlay(screenshot, all_elements, latest_overlay_path)
+        draw_overlay(screenshot, actionable_elements(all_elements), clean_overlay_path)
+        draw_overlay(screenshot, actionable_elements(all_elements), latest_clean_overlay_path)
+        if not args.quiet:
+            print(json.dumps(payload["counts"], indent=2))
+            print("Cache: hit")
+            print(f"JSON: {json_path}")
+            print(f"Overlay: {overlay_path}")
+            print(f"Actionable overlay: {clean_overlay_path}")
+        return
 
     uia_elements = run_uia_scan(args.max_depth, args.max_elements)
     visual_elements = detect_visual_boxes(screenshot, args.vision_limit)
@@ -230,6 +265,8 @@ def main() -> None:
             "buttons": sum(1 for item in all_elements if item.get("role") == "button"),
             "inputs": sum(1 for item in all_elements if item.get("role") == "edit"),
         },
+        "screen_hash": screen_key,
+        "cache_hit": False,
         "elements": all_elements,
         "files": {
             "screenshot": str(screenshot_path),
@@ -240,6 +277,7 @@ def main() -> None:
 
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     latest_json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    cache_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     draw_overlay(screenshot, all_elements, overlay_path)
     draw_overlay(screenshot, all_elements, latest_overlay_path)
     draw_overlay(screenshot, actionable_elements(all_elements), clean_overlay_path)
