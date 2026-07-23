@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 venv/
 runs/
+data/certs/
 *.pt
 *.onnx
 *.safetensors
@@ -15,6 +16,7 @@ ai_pc_operator/data/downloads/
 ai_pc_operator/data/quarantine/
 ai_pc_operator/data/memory/
 ai_pc_operator/data/.screen_ai_cache/
+ai_pc_operator/data/certs/
 hackathon_ui_operator_distill/data/raw_screenshots/*.png
 hackathon_ui_operator_distill/data/raw_screenshots/*.jpg
 hackathon_ui_operator_distill/data/raw_screenshots/*.jpeg

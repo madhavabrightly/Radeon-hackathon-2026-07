@@ -1,5 +1,43 @@
 # Screen-AI Run Change Log
 
+## 2026-07-24 02:01:49 +05:30
+
+Purpose: fix mobile `Camera API unavailable` by adding a local HTTPS server.
+
+### Why
+
+Phone browsers block `getUserMedia()` on plain LAN HTTP URLs such as:
+
+```text
+http://10.211.40.102:8000/remote/index.html
+```
+
+Camera scanning needs HTTPS or localhost.
+
+### Changes
+
+- Added `ai_pc_operator/backend/scripts/start_https.py`.
+- The script generates a local self-signed certificate under ignored runtime data:
+
+```text
+ai_pc_operator/data/certs/
+```
+
+- HTTPS server runs on:
+
+```text
+https://localhost:8443/remote/pair.html
+https://10.211.40.102:8443/remote/index.html
+```
+
+### Verification
+
+```text
+python -m py_compile ai_pc_operator/backend/scripts/start_https.py : pass
+GET https://localhost:8443/remote/pair.html : pass with certificate check skipped
+GET https://localhost:8443/remote/index.html : pass with certificate check skipped
+```
+
 ## 2026-07-24 01:50:32 +05:30
 
 Purpose: repair the enhanced mobile/PC login implementation that was left hanging by the previous run.
