@@ -70,7 +70,7 @@ Cloud training path:
 cd hackathon_ui_operator_distill
 bash cloud/setup_cloud_gpu.sh
 bash cloud/download_omniparser_v2.sh
-python cloud/run_teacher_labeling.py --screens data/raw_screenshots --out data/labels_teacher --mode placeholder
+python cloud/run_teacher_labeling.py --screens data/raw_screenshots --out data/labels_teacher --mode omniparser
 python cloud/convert_teacher_to_yolo.py --labels data/labels_teacher --out data/yolo_dataset
 python cloud/train_student_yolo.py --data data/yolo_dataset/ui_dataset.yaml --model yolov8n.pt --epochs 80 --device 0
 python cloud/export_int8_onnx.py --weights runs/ui_student/weights/best.pt --out ui_detector_int8.onnx

@@ -87,10 +87,17 @@ class PairingManager:
 
     async def verify_device(self, device_id: str, token: str = None) -> bool:
         """Verify if device is paired and active."""
+        if not token:
+            return False
+
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
         async with db_session() as db:
             cursor = await db.execute(
-                "SELECT id FROM devices WHERE id = ? AND active = 1",
-                (device_id,),
+                """
+                SELECT id FROM devices
+                WHERE id = ? AND token_hash = ? AND active = 1
+                """,
+                (device_id, token_hash),
             )
             row = await cursor.fetchone()
 

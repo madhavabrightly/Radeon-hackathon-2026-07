@@ -63,6 +63,8 @@ async def test_planner():
         "open YouTube",
         "search best air coolers in chrome",
         "close browser",
+        "scan screen buttons",
+        "click Share",
         "delete files in Downloads",
         "login to github.com",
     ]
@@ -87,6 +89,17 @@ async def test_planner():
     plan = await planner.create_plan("close browser", intent)
     assert intent == "browser_close"
     assert plan["steps"][0]["tool"] == "browser.close"
+
+    intent = await planner.classify_intent("scan screen buttons")
+    plan = await planner.create_plan("scan screen buttons", intent)
+    assert intent == "screen_scan"
+    assert plan["steps"][0]["tool"] == "screen.scan"
+
+    intent = await planner.classify_intent("click Share")
+    plan = await planner.create_plan("click Share", intent)
+    assert intent == "screen_click"
+    assert plan["steps"][0]["tool"] == "screen.click_text"
+    assert plan["steps"][0]["args"]["text"] == "Share"
 
 
 async def test_permissions():
@@ -216,6 +229,21 @@ async def test_model_artifacts_and_prompts():
     print(f"[ok] Screen cache stats: {cache.stats()}")
 
 
+async def test_pairing_token_verification():
+    """Test paired devices must present the matching token."""
+    from app.security.pairing import PairingManager
+
+    print("\nTesting pairing token verification...")
+    manager = PairingManager()
+    code = await manager.generate_code()
+    device = await manager.pair_device(code, "Test Phone")
+    assert device
+    assert await manager.verify_device(device["id"], device["token"])
+    assert not await manager.verify_device(device["id"], "wrong-token")
+    assert not await manager.verify_device(device["id"], None)
+    print("[ok] Pairing token hash verification works")
+
+
 async def main():
     """Run all tests."""
     from app.db.database import close_db
@@ -233,6 +261,7 @@ async def main():
         await test_redactor()
         await test_runtime_pipeline()
         await test_model_artifacts_and_prompts()
+        await test_pairing_token_verification()
 
         print("\n" + "=" * 60)
         print("All tests passed! [ok]")

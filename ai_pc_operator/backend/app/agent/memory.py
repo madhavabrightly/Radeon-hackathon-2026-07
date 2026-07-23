@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -58,26 +59,41 @@ class Memory:
             if query_lower in entry["command"].lower():
                 results.append(entry)
 
-        # Search long-term
-        if self.long_term_path.exists():
-            with open(self.long_term_path, "r") as f:
-                for line in f:
-                    try:
-                        entry = json.loads(line)
-                        if query_lower in entry["command"].lower():
-                            results.append(entry)
-                    except json.JSONDecodeError:
-                        continue
+        results.extend(await asyncio.to_thread(self._search_long_term_sync, query_lower))
 
         return results
 
     async def _save_long_term(self, entry: Dict[str, Any]) -> None:
         """Save entry to long-term memory."""
-        with open(self.long_term_path, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        await asyncio.to_thread(self._save_long_term_sync, entry)
 
     async def clear(self) -> None:
         """Clear all memory."""
         self.short_term.clear()
+        await asyncio.to_thread(self._clear_long_term_sync)
+
+    def _search_long_term_sync(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Blocking JSONL search used through asyncio.to_thread."""
+        if not self.long_term_path.exists():
+            return []
+
+        matches = []
+        with open(self.long_term_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if query_lower in entry.get("command", "").lower():
+                    matches.append(entry)
+        return matches
+
+    def _save_long_term_sync(self, entry: Dict[str, Any]) -> None:
+        """Blocking JSONL append used through asyncio.to_thread."""
+        with open(self.long_term_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def _clear_long_term_sync(self) -> None:
+        """Blocking long-term delete used through asyncio.to_thread."""
         if self.long_term_path.exists():
             self.long_term_path.unlink()

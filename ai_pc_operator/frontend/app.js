@@ -1,7 +1,7 @@
 // Screen-AI Mobile Remote App - Enhanced with QR + Trust + Rotation
 
 const API_BASE = window.location.origin;
-const WS_URL = `ws://${window.location.host}/ws`;
+const WS_SCHEME = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
 // State
 let state = {
@@ -418,6 +418,41 @@ function setStatus(elementId, message, type) {
     }
 }
 
+function authHeaders(extra = {}) {
+    return {
+        ...extra,
+        ...(state.token ? { 'Authorization': `Bearer ${state.token}` } : {}),
+    };
+}
+
+function clearNode(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+}
+
+function emptyMessage(text) {
+    const p = document.createElement('p');
+    p.className = 'empty-message';
+    p.textContent = text;
+    return p;
+}
+
+function appendText(parent, tag, text, className = '') {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    el.textContent = text ?? '';
+    parent.appendChild(el);
+    return el;
+}
+
+function parseJsonSafe(value) {
+    if (!value) return null;
+    try {
+        return JSON.parse(value);
+    } catch {
+        return value;
+    }
+}
+
 // ============================================================
 // Token Rotation (security)
 // ============================================================
@@ -428,7 +463,7 @@ async function rotateTokenNow() {
     try {
         const response = await fetch(`${API_BASE}/auth/rotate`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 device_id: state.deviceId,
                 old_token: state.token,
@@ -570,37 +605,50 @@ async function sendCommand() {
 async function loadApprovals() {
     try {
         const response = await fetch(`${API_BASE}/approvals/pending?device_id=${state.deviceId}`, {
-            headers: { 'Authorization': `Bearer ${state.token}` },
+            headers: authHeaders(),
         });
 
         const data = await response.json();
         const list = document.getElementById('approvals-list');
+        clearNode(list);
 
         if (!data.approvals || data.approvals.length === 0) {
-            list.innerHTML = '<p style="color: #888; text-align: center;">No pending approvals</p>';
+            list.appendChild(emptyMessage('No pending approvals'));
             return;
         }
 
-        list.innerHTML = data.approvals.map(approval => `
-            <div class="approval-card">
-                <h3>${approval.action_type}</h3>
-                <p class="description">${approval.description}</p>
-                ${approval.impact_summary ? `
-                    <div class="impact">
-                        <strong>Impact:</strong>
-                        <pre>${JSON.stringify(JSON.parse(approval.impact_summary || '{}'), null, 2)}</pre>
-                    </div>
-                ` : ''}
-                <div class="approval-actions">
-                    <button class="approve-btn" onclick="resolveApproval(${approval.id}, true)">
-                        Approve
-                    </button>
-                    <button class="reject-btn" onclick="resolveApproval(${approval.id}, false)">
-                        Reject
-                    </button>
-                </div>
-            </div>
-        `).join('');
+        data.approvals.forEach(approval => {
+            const card = document.createElement('div');
+            card.className = 'approval-card';
+            appendText(card, 'h3', approval.action_type);
+            appendText(card, 'p', approval.description, 'description');
+
+            if (approval.impact_summary) {
+                const impact = document.createElement('div');
+                impact.className = 'impact';
+                appendText(impact, 'strong', 'Impact:');
+                appendText(
+                    impact,
+                    'pre',
+                    JSON.stringify(parseJsonSafe(approval.impact_summary), null, 2)
+                );
+                card.appendChild(impact);
+            }
+
+            const actions = document.createElement('div');
+            actions.className = 'approval-actions';
+            const approve = document.createElement('button');
+            approve.className = 'approve-btn';
+            approve.textContent = 'Approve';
+            approve.addEventListener('click', () => resolveApproval(approval.id, true));
+            const reject = document.createElement('button');
+            reject.className = 'reject-btn';
+            reject.textContent = 'Reject';
+            reject.addEventListener('click', () => resolveApproval(approval.id, false));
+            actions.append(approve, reject);
+            card.appendChild(actions);
+            list.appendChild(card);
+        });
 
     } catch (error) {
         console.error('Failed to load approvals:', error);
@@ -615,11 +663,11 @@ async function resolveApproval(approvalId, approved) {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/approvals/resolve`, {
+        const response = await fetch(`${API_BASE}/approvals/resolve?device_id=${encodeURIComponent(state.deviceId)}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${state.token}`,
+                ...authHeaders(),
             },
             body: JSON.stringify({
                 approval_id: approvalId,
@@ -642,25 +690,34 @@ async function resolveApproval(approvalId, approved) {
 
 async function loadHistory() {
     try {
-        const response = await fetch(`${API_BASE}/history?limit=50`);
+        const response = await fetch(`${API_BASE}/history?limit=50&device_id=${encodeURIComponent(state.deviceId)}`, {
+            headers: authHeaders(),
+        });
         const data = await response.json();
 
         const list = document.getElementById('history-list');
+        clearNode(list);
 
         if (!data.history || data.history.length === 0) {
-            list.innerHTML = '<p style="color: #888; text-align: center;">No history yet</p>';
+            list.appendChild(emptyMessage('No history yet'));
             return;
         }
 
-        list.innerHTML = data.history.map(item => `
-            <div class="history-item">
-                <div class="command">${item.input_text}</div>
-                <div class="status ${item.status}">
-                    ${item.status} • ${new Date(item.created_at).toLocaleString()}
-                </div>
-                ${item.result ? `<div style="margin-top: 8px; font-size: 0.85em; color: #aaa;">${item.result}</div>` : ''}
-            </div>
-        `).join('');
+        data.history.forEach(item => {
+            const row = document.createElement('div');
+            row.className = 'history-item';
+            appendText(row, 'div', item.input_text, 'command');
+            appendText(
+                row,
+                'div',
+                `${item.status} - ${new Date(item.created_at).toLocaleString()}`,
+                `status ${item.status}`
+            );
+            if (item.result) {
+                appendText(row, 'div', item.result, 'history-result');
+            }
+            list.appendChild(row);
+        });
 
     } catch (error) {
         console.error('Failed to load history:', error);
@@ -677,9 +734,9 @@ async function emergencyStop() {
     }
 
     try {
-        await fetch(`${API_BASE}/emergency/stop`, {
+        await fetch(`${API_BASE}/emergency/stop?device_id=${encodeURIComponent(state.deviceId)}`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${state.token}` },
+            headers: authHeaders(),
         });
 
         alert('Emergency stop activated');
@@ -717,7 +774,11 @@ function unpairDevice() {
 
 function connectWebSocket() {
     try {
-        state.ws = new WebSocket(WS_URL);
+        const params = new URLSearchParams({
+            device_id: state.deviceId || '',
+            token: state.token || '',
+        });
+        state.ws = new WebSocket(`${WS_SCHEME}//${window.location.host}/ws?${params.toString()}`);
 
         state.ws.onopen = () => {
             console.log('WebSocket connected');

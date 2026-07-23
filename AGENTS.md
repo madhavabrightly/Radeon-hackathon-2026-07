@@ -1513,3 +1513,41 @@ Important:
 - Do not commit model binaries. `.gitignore` excludes `*.gguf`, `*.onnx`, and `*.pt`.
 - `ui_detector_int8.onnx` is still expected to come from our cloud distillation/export pipeline.
 - The OmniParser `.pt` teacher model is saved for cloud use, but the 4 GB laptop runtime should load the exported INT8 ONNX detector.
+
+## Codebase Analysis Fix Pass: 2026-07-24 02:25:43 +05:30
+
+Primary demo path is now:
+
+```text
+mobile text command -> AgentRouter -> Planner -> screen.click_text/screen.scan -> Windows UIA/OpenCV -> result
+```
+
+New backend tools:
+
+- `screen.scan`: returns visible actionable controls and endpoints.
+- `screen.click_text`: fuzzy-matches visible text/accessibility labels and clicks the center point.
+
+Security constraints:
+
+- Do not reintroduce `shell=True` for user-derived app/command text.
+- Paired-device endpoints should verify token hashes, not only device ids.
+- Frontend must render server-provided strings with `textContent`, not `innerHTML`.
+- WebSocket clients should pass `device_id` and `token`; HTTPS pages should use `wss://`.
+
+Cloud detector path:
+
+```bash
+python cloud/run_teacher_labeling.py --screens data/raw_screenshots --out data/labels_teacher --mode omniparser
+python cloud/convert_teacher_to_yolo.py --labels data/labels_teacher --out data/yolo_dataset
+python cloud/train_student_yolo.py --data data/yolo_dataset/ui_dataset.yaml --model yolov8n.pt --epochs 80 --device 0
+python cloud/export_int8_onnx.py --weights runs/ui_student/weights/best.pt --out ui_detector_int8.onnx
+```
+
+Verified locally:
+
+```text
+test_basic.py: pass
+test_login_v2.py: pass
+ScreenTools.scan: 226 actionable controls
+ScreenTools.click_text("Close", dry_run=True): success
+```

@@ -69,6 +69,8 @@ class RiskClassifier:
             "list_files": 0,
             "search_web": 0,
             "browser_close": 0,
+            "screen_scan": 0,
+            "screen_click": 1,
             "open_app": 1,
             "open_website": 1,
             "download_file": 2,

@@ -1,5 +1,80 @@
 # Screen-AI Run Change Log
 
+## 2026-07-24 02:25:43 +05:30
+
+Purpose: close the unresolved codebase-analysis gaps that could break the hackathon demo or weaken local security.
+
+### Backend Screen Control
+
+- Added `ai_pc_operator/backend/app/tools/screen_tools.py`.
+- Registered `screen` tools in `AgentRouter`.
+- Added planner support for:
+  - `screen.scan`
+  - `screen.click_text`
+- Commands such as `scan screen buttons` and `click Share` now route through the backend instead of staying as standalone CLI-only behavior.
+- `screen.click_text` uses UI Automation/actionable elements with fuzzy text scoring and supports `dry_run`.
+
+### Security Hotfixes
+
+- Removed unsafe `shell=True` app launch/command execution from `system_tools.py`.
+- `system.open_app` now resolves sanitized app aliases/executables.
+- `system.run_command` now parses argv and runs without a shell.
+- Legacy pairing verification now checks the stored token hash instead of only checking device id.
+- `/command`, `/history`, `/approvals/pending`, `/approvals/resolve`, `/emergency/stop`, and `/ws` now have paired-device token verification paths.
+- `browser.download` now sanitizes filenames and blocks dangerous executable/script extensions.
+
+### Frontend Fixes
+
+- Fixed `loadHistory()` to send Authorization and device id.
+- Replaced server-content `innerHTML` rendering for approvals/history with DOM nodes and `textContent`.
+- WebSocket now uses `wss://` automatically on HTTPS pages.
+- Approval resolve and emergency stop now send authenticated device context.
+- Reduced duplicate login surface by making `login.html` redirect to the canonical `index.html`.
+
+### Scanner Reliability
+
+- `scan_screen.py` now tolerates UIA timeout by falling back to vision candidates.
+- `uia_scan.ps1` no longer silently swallows every error; it skips broken/unavailable UIA branches per element.
+- Verified normal scan on this desktop:
+
+```text
+screen: 1920x1080
+uia: 459
+vision: 35
+total: 481
+actionable: 226
+```
+
+### Cloud Pipeline
+
+- `run_teacher_labeling.py` now runs the OmniParser V2 icon detector through Ultralytics when weights are present.
+- `convert_teacher_to_yolo.py` now writes `ui_dataset.yaml`.
+- `export_int8_onnx.py` now stages the final `ui_detector_int8.onnx` into `ai_pc_operator/data/models/`.
+- README cloud workflow now defaults to `--mode omniparser`.
+
+### Low-Memory Runtime
+
+- Browser idle eviction reduced from 300 seconds to 120 seconds.
+- Long-term memory JSONL search/write/delete now runs through `asyncio.to_thread()`.
+
+### Verification
+
+```text
+py_compile backend/tools/scanner/cloud scripts: pass
+node --check frontend/app.js: pass
+python -u ai_pc_operator/backend/test_basic.py: pass
+python -u ai_pc_operator/backend/test_login_v2.py: pass
+ScreenTools.scan normal depth: pass, 226 actionable controls found
+ScreenTools.click_text("Close", dry_run=True): pass
+```
+
+### Still Not Fully Complete
+
+- Mobile vault unlock UI is still not built.
+- Passkey approval UI is still not built.
+- Full Access Session UI is still not built.
+- Actual `ui_detector_int8.onnx` still requires running the cloud training/export workflow.
+
 ## 2026-07-24 02:10:11 +05:30
 
 Purpose: install/save project model artifacts and make the model folder reproducible.

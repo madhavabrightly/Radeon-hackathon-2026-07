@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import webbrowser
 from urllib.parse import quote_plus, urlparse
 from typing import Dict, Any, Optional
 
 
-DEFAULT_IDLE_TIMEOUT_SEC = 300
+DEFAULT_IDLE_TIMEOUT_SEC = 120
 
 
 class BrowserTools:
@@ -197,6 +198,14 @@ class BrowserTools:
 
             if not filename:
                 filename = url.split("/")[-1]
+            filename = self._safe_download_name(filename)
+            if self._is_dangerous_download(filename):
+                return {
+                    "status": "blocked",
+                    "url": url,
+                    "filename": filename,
+                    "reason": "Dangerous executable/script download requires a dedicated approved installer flow.",
+                }
 
             download_path = DOWNLOAD_DIR / filename
 
@@ -213,6 +222,27 @@ class BrowserTools:
                 "status": "failed",
                 "error": str(e),
             }
+
+    def _safe_download_name(self, filename: str) -> str:
+        """Keep browser downloads inside the downloads directory."""
+        cleaned = re.sub(r"[^a-zA-Z0-9._ -]", "_", filename).strip(" .")
+        return cleaned or "download.bin"
+
+    def _is_dangerous_download(self, filename: str) -> bool:
+        """Flag file types that should not be silently downloaded/run."""
+        dangerous_extensions = {
+            ".exe",
+            ".msi",
+            ".bat",
+            ".cmd",
+            ".ps1",
+            ".vbs",
+            ".js",
+            ".jar",
+            ".scr",
+            ".reg",
+        }
+        return any(filename.lower().endswith(ext) for ext in dangerous_extensions)
 
     async def close(self) -> Dict[str, Any]:
         """Close browser."""

@@ -20,6 +20,7 @@ from app.tools.system_tools import SystemTools
 from app.tools.file_tools import FileTools
 from app.tools.browser_tools import BrowserTools
 from app.tools.auth_tools import AuthTools
+from app.tools.screen_tools import ScreenTools
 from app.db.database import db_session
 from app.logs.redactor import LogRedactor
 from app.runtime.artifact_store import ArtifactStore
@@ -50,6 +51,7 @@ class AgentRouter:
         file_tools: FileTools,
         browser_tools: BrowserTools,
         auth_tools: AuthTools,
+        screen_tools: ScreenTools,
     ):
         """Initialize agent router."""
         self.planner = Planner()
@@ -74,6 +76,7 @@ class AgentRouter:
             "file": file_tools,
             "browser": browser_tools,
             "auth": auth_tools,
+            "screen": screen_tools,
         }
 
         self.emergency_stopped = False

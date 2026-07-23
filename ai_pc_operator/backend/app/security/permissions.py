@@ -20,6 +20,7 @@ class PermissionEngine:
         "file.read",
         "browser.search",
         "browser.read",
+        "screen.scan",
     }
 
     # Actions that always need approval (risk 3+)

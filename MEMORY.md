@@ -627,3 +627,43 @@ Notes:
 **Last Updated**: 2026-07-24 02:10:11 +05:30
 **Version**: 1.3.2
 **Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-24 02:25:43 +05:30
+
+Focus: solve the unresolved codebase-analysis gaps that were practical blockers.
+
+Solved:
+
+- Backend screen scan/click is now wired through `screen.scan` and `screen.click_text`.
+- Planner routes `scan screen buttons` and `click Share` into backend tools.
+- System shell injection risks were removed from app opening and raw command execution.
+- Pairing verification now checks token hashes.
+- Authenticated endpoints now support/require paired-device token verification where mobile calls need it.
+- Frontend history/approval rendering no longer injects server strings as HTML.
+- Frontend history, approval resolve, emergency stop, and WebSocket now send authenticated device context.
+- Cloud teacher labeling now runs OmniParser V2 icon detector through Ultralytics instead of only printing placeholder instructions.
+- YOLO converter writes `ui_dataset.yaml`; ONNX export stages `ui_detector_int8.onnx`.
+- UIA scanner is more tolerant of unavailable desktop elements.
+- Browser idle timeout reduced to 120 seconds.
+- Long-term memory file I/O moved off the event loop.
+
+Verified:
+
+```text
+test_basic.py: pass
+test_login_v2.py: pass
+node --check app.js: pass
+ScreenTools.scan: pass, 226 actionable controls
+ScreenTools.click_text("Close", dry_run=True): pass
+```
+
+Remaining:
+
+- Build mobile vault unlock UI.
+- Build passkey approval UI.
+- Build Full Access Session UI.
+- Run the AMD/ROCm cloud workflow to produce real `ui_detector_int8.onnx`.
+
+**Last Updated**: 2026-07-24 02:25:43 +05:30
+**Version**: 1.3.3
+**Maintainer**: Screen-AI Team

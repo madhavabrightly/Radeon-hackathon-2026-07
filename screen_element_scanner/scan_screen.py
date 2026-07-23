@@ -29,23 +29,26 @@ def image_hash(image: Image.Image) -> str:
 
 def run_uia_scan(max_depth: int, max_elements: int) -> list[dict]:
     script = ROOT / "uia_scan.ps1"
-    completed = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(script),
-            "-MaxDepth",
-            str(max_depth),
-            "-MaxElements",
-            str(max_elements),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                "-MaxDepth",
+                str(max_depth),
+                "-MaxElements",
+                str(max_elements),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        return []
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip())
 

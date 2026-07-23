@@ -12,7 +12,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, HTTPException, Depends
+from fastapi import FastAPI, WebSocket, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -28,6 +28,7 @@ from app.tools.system_tools import SystemTools
 from app.tools.file_tools import FileTools
 from app.tools.browser_tools import BrowserTools
 from app.tools.auth_tools import AuthTools
+from app.tools.screen_tools import ScreenTools
 from app.logs.redactor import LogRedactor
 
 # Paths
@@ -93,6 +94,7 @@ async def lifespan(app: FastAPI):
         file_tools=FileTools(),
         browser_tools=BrowserTools(),
         auth_tools=AuthTools(),
+        screen_tools=ScreenTools(),
     )
 
     logger.info("AI PC Operator started successfully")
@@ -184,6 +186,27 @@ class BiometricVerifyRequest(BaseModel):
 
 
 # REST API endpoints
+def bearer_token(authorization: Optional[str]) -> str:
+    """Extract a Bearer token from an Authorization header."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    return authorization.split(" ", 1)[1].strip()
+
+
+async def require_device_auth(
+    device_id: Optional[str],
+    authorization: Optional[str],
+) -> None:
+    """Verify a paired mobile device against its token."""
+    if not device_id:
+        raise HTTPException(status_code=401, detail="Missing device id")
+    if not pairing_manager:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    token = bearer_token(authorization)
+    if not await pairing_manager.verify_device(device_id, token):
+        raise HTTPException(status_code=401, detail="Device not paired")
+
+
 @app.get("/")
 async def root():
     """Root endpoint - serves mobile web remote."""
@@ -390,15 +413,17 @@ async def verify_biometric_challenge(request: BiometricVerifyRequest):
 
 
 @app.post("/command")
-async def execute_command(request: CommandRequest):
+async def execute_command(
+    request: CommandRequest,
+    authorization: Optional[str] = Header(default=None),
+):
     """Execute a command from mobile remote."""
     if not agent_router:
         raise HTTPException(status_code=503, detail="Server not ready")
 
     # Verify device if provided
     if request.device_id:
-        if not await pairing_manager.verify_device(request.device_id):
-            raise HTTPException(status_code=401, detail="Device not paired")
+        await require_device_auth(request.device_id, authorization)
 
     # Route command through agent
     result = await agent_router.process_command(
@@ -410,20 +435,29 @@ async def execute_command(request: CommandRequest):
 
 
 @app.get("/approvals/pending")
-async def get_pending_approvals(device_id: Optional[str] = None):
+async def get_pending_approvals(
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
     """Get pending approval requests."""
     if not approval_manager:
         raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
 
     approvals = await approval_manager.get_pending(device_id)
     return {"approvals": approvals}
 
 
 @app.post("/approvals/resolve")
-async def resolve_approval(request: ApprovalRequest):
+async def resolve_approval(
+    request: ApprovalRequest,
+    authorization: Optional[str] = Header(default=None),
+    device_id: Optional[str] = Query(default=None),
+):
     """Resolve an approval request."""
     if not approval_manager:
         raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
 
     success = await approval_manager.resolve(
         approval_id=request.approval_id,
@@ -438,9 +472,13 @@ async def resolve_approval(request: ApprovalRequest):
 
 
 @app.post("/emergency/stop")
-async def emergency_stop():
+async def emergency_stop(
+    device_id: Optional[str] = Query(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
     """Emergency stop - halt all operations."""
     logger.warning("EMERGENCY STOP triggered!")
+    await require_device_auth(device_id, authorization)
 
     if agent_router:
         await agent_router.emergency_stop()
@@ -452,8 +490,13 @@ async def emergency_stop():
 
 
 @app.get("/history")
-async def get_history(limit: int = 50):
+async def get_history(
+    limit: int = 50,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
     """Get command history."""
+    await require_device_auth(device_id, authorization)
     safe_limit = min(max(limit, 1), 200)
     async with db_session() as db:
         cursor = await db.execute(
@@ -475,6 +518,15 @@ async def get_history(limit: int = 50):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket for real-time communication with mobile."""
+    device_id = websocket.query_params.get("device_id")
+    token = websocket.query_params.get("token")
+    if not device_id or not token or not pairing_manager:
+        await websocket.close(code=1008)
+        return
+    if not await pairing_manager.verify_device(device_id, token):
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     logger.info("WebSocket connected")
 

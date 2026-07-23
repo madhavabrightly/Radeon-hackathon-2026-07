@@ -91,6 +91,14 @@ class Planner:
             "run_command": [
                 r"\b(run|execute)\b.*\b(command|script|code)\b",
             ],
+            "screen_click": [
+                r"\b(click|press|tap|select)\b\s+(.+)",
+                r"\b(click|press|tap|select)\b.*\b(button|link|tab|field)\b",
+            ],
+            "screen_scan": [
+                r"\b(scan|show|detect|find)\b.*\b(screen|buttons|ui|controls)\b",
+                r"\bwhat\b.*\b(on|in)\b.*\b(screen)\b",
+            ],
         }
         return {
             intent: [re.compile(pattern) for pattern in patterns]
@@ -191,6 +199,20 @@ class Planner:
             return {
                 "steps": [
                     {"tool": "browser.download", "args": {"url": url}},
+                ]
+            }
+
+        elif intent == "screen_click":
+            return {
+                "steps": [
+                    {"tool": "screen.click_text", "args": {"text": self._extract_click_text(text)}},
+                ]
+            }
+
+        elif intent == "screen_scan":
+            return {
+                "steps": [
+                    {"tool": "screen.scan", "args": {}},
                 ]
             }
 
@@ -295,3 +317,14 @@ class Planner:
             return f"https://{match.group(1)}"
 
         return "https://www.google.com"
+
+    def _extract_click_text(self, text: str) -> str:
+        """Extract visible UI text from a click/tap command."""
+        cleaned = re.sub(
+            r"\b(click|press|tap|select|button|link|tab|field|on|the)\b",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" .:\"'")
+        return cleaned or text.strip()

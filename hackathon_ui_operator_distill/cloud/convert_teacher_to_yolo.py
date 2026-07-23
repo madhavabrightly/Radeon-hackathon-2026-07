@@ -99,9 +99,24 @@ def main() -> None:
         dst_label.write_text("\n".join(lines), encoding="utf-8")
         converted += 1
 
+    yaml_path = out / "ui_dataset.yaml"
+    names = [name for name, _ in sorted(CLASSES.items(), key=lambda item: item[1])]
+    yaml_path.write_text(
+        "\n".join(
+            [
+                f"path: {out.as_posix()}",
+                "train: images/train",
+                "val: images/val",
+                "names:",
+                *[f"  {idx}: {name}" for idx, name in enumerate(names)],
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     print(f"converted {converted} images into {out}")
+    print(f"dataset yaml written to {yaml_path}")
 
 
 if __name__ == "__main__":
     main()
-

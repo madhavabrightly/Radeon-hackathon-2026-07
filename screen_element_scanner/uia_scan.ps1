@@ -3,7 +3,7 @@ param(
   [int]$MaxElements = 2500
 )
 
-$ErrorActionPreference = "SilentlyContinue"
+$ErrorActionPreference = "Stop"
 
 Add-Type -AssemblyName UIAutomationClient | Out-Null
 Add-Type -AssemblyName UIAutomationTypes | Out-Null
@@ -34,7 +34,11 @@ $interestingTypes = @(
 )
 
 function Get-ElementKey($element) {
-  $r = $element.Current.BoundingRectangle
+  try {
+    $r = $element.Current.BoundingRectangle
+  } catch {
+    return
+  }
   return "$($element.Current.ControlType.ProgrammaticName)|$($element.Current.Name)|$($element.Current.AutomationId)|$([int]$r.Left),$([int]$r.Top),$([int]$r.Right),$([int]$r.Bottom)"
 }
 
@@ -42,30 +46,38 @@ function Add-Element($element, [int]$depth) {
   if ($null -eq $element) { return }
   if ($script:items.Count -ge $MaxElements) { return }
 
-  $r = $element.Current.BoundingRectangle
+  try {
+    $r = $element.Current.BoundingRectangle
+    $typeName = $element.Current.ControlType.ProgrammaticName
+    $name = $element.Current.Name
+    $automationId = $element.Current.AutomationId
+    $localizedControlType = $element.Current.LocalizedControlType
+    $className = $element.Current.ClassName
+    $processId = $element.Current.ProcessId
+  } catch {
+    return
+  }
   $w = [double]($r.Right - $r.Left)
   $h = [double]($r.Bottom - $r.Top)
   if ($w -le 1 -or $h -le 1) { return }
-
-  $typeName = $element.Current.ControlType.ProgrammaticName
-  $name = $element.Current.Name
-  $automationId = $element.Current.AutomationId
+  if ([string]::IsNullOrWhiteSpace($typeName)) { return }
 
   $hasUsefulText = -not [string]::IsNullOrWhiteSpace($name) -or -not [string]::IsNullOrWhiteSpace($automationId)
   $isInteresting = $interestingTypes -contains $typeName
   if (-not $isInteresting -and -not $hasUsefulText) { return }
 
   $key = Get-ElementKey $element
+  if ([string]::IsNullOrWhiteSpace($key)) { return }
   if (-not $script:seen.Add($key)) { return }
 
   $script:items.Add([ordered]@{
     source = "uia"
     role = $typeName.Replace("ControlType.", "").ToLowerInvariant()
-    localized_role = $element.Current.LocalizedControlType
+    localized_role = $localizedControlType
     label = $name
     automation_id = $automationId
-    class_name = $element.Current.ClassName
-    process_id = $element.Current.ProcessId
+    class_name = $className
+    process_id = $processId
     depth = $depth
     bounds = @(
       [int]$r.Left,
@@ -88,11 +100,19 @@ function Walk-Element($element, [int]$depth) {
 
   Add-Element $element $depth
 
-  $child = $walker.GetFirstChild($element)
+  try {
+    $child = $walker.GetFirstChild($element)
+  } catch {
+    return
+  }
   while ($null -ne $child) {
     Walk-Element $child ($depth + 1)
     if ($script:items.Count -ge $MaxElements) { return }
-    $child = $walker.GetNextSibling($child)
+    try {
+      $child = $walker.GetNextSibling($child)
+    } catch {
+      return
+    }
   }
 }
 

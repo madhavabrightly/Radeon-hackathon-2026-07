@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import psutil
 import platform
+import re
+import shlex
 import subprocess
 import shutil
 import time
@@ -12,6 +14,23 @@ from typing import Dict, Any, List
 
 class SystemTools:
     """System control tools."""
+
+    APP_ALIASES = {
+        "chrome": "chrome",
+        "edge": "msedge",
+        "firefox": "firefox",
+        "notepad": "notepad",
+        "calculator": "calc",
+        "calc": "calc",
+        "explorer": "explorer",
+        "paint": "mspaint",
+        "cmd": "cmd",
+        "powershell": "powershell",
+        "terminal": "wt",
+        "excel": "excel",
+        "word": "winword",
+        "powerpoint": "powerpnt",
+    }
 
     async def status(self) -> Dict[str, Any]:
         """Get system status."""
@@ -85,11 +104,11 @@ class SystemTools:
     async def open_app(self, name: str) -> Dict[str, Any]:
         """Open an application."""
         try:
-            # Try to open using Windows start command
-            subprocess.Popen(f"start {name}", shell=True)
+            executable = self._resolve_app(name)
+            subprocess.Popen([executable])
             return {
                 "status": "success",
-                "message": f"Opened {name}",
+                "message": f"Opened {executable}",
             }
         except Exception as e:
             return {
@@ -125,9 +144,11 @@ class SystemTools:
     async def run_command(self, command: str) -> Dict[str, Any]:
         """Run a shell command (HIGH RISK)."""
         try:
+            args = shlex.split(command, posix=False)
+            if not args:
+                return {"status": "failed", "error": "Empty command"}
             result = subprocess.run(
-                command,
-                shell=True,
+                args,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -143,3 +164,17 @@ class SystemTools:
                 "status": "failed",
                 "error": str(e),
             }
+
+    def _resolve_app(self, name: str) -> str:
+        """Resolve a natural app name to a safe executable name."""
+        cleaned = re.sub(r"[^a-zA-Z0-9_. -]", "", name).strip().lower()
+        if not cleaned:
+            raise ValueError("App name is empty after sanitization")
+
+        alias = self.APP_ALIASES.get(cleaned, cleaned.split()[0])
+        found = shutil.which(alias)
+        if found:
+            return found
+        if alias in self.APP_ALIASES.values():
+            return alias
+        raise ValueError(f"Unknown or unavailable app: {name}")
