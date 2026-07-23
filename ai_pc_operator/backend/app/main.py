@@ -30,7 +30,7 @@ from app.tools.auth_tools import AuthTools
 from app.logs.redactor import LogRedactor
 
 # Paths
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = ROOT / "ai_pc_operator" / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
