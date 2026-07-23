@@ -1372,3 +1372,33 @@ browser-warmup
 ```
 
 These are placeholders until actual OCR/YOLO/GGUF artifacts are downloaded. Do not block the event loop while adding real loaders; use `ModelRegistry` + `IOPool`.
+
+## 2026-07-24 Browser Command Reliability
+
+The command layer now treats common browser requests as first-class actions.
+
+Implemented:
+
+- Planner recognizes commands such as:
+  - `search best air coolers in chrome`
+  - `open YouTube`
+  - `open github.com`
+  - `close browser`
+- Search query cleanup removes browser hints such as `in chrome`, `on browser`, and `with edge`.
+- Site aliases are mapped for common services including YouTube, Google, GitHub, Gmail, Amazon, Reddit, Instagram, LinkedIn, and ChatGPT.
+- `browser.search` URL-encodes queries before navigation.
+- `browser.open` normalizes bare domains to HTTPS URLs.
+- If Playwright Chromium is unavailable, browser open/search falls back to the OS default browser instead of returning a failed command.
+- `AgentRouter` now returns `unsupported` for commands with no executable plan instead of `completed` with `No actions taken`.
+- Vault key derivation falls back to PBKDF2-HMAC-SHA256 when the local Windows `cryptography` Argon2 binding is broken.
+
+Current limitation:
+
+- The fallback can open/search in the system browser, but DOM click/type automation still needs Playwright browser binaries installed.
+- On this machine, Playwright Chromium was installed successfully with `python -m playwright install chromium`.
+
+Recommended next command when Playwright automation is needed:
+
+```powershell
+python -m playwright install chromium
+```

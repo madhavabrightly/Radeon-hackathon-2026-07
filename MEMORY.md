@@ -432,3 +432,41 @@ Next work:
 **Last Updated**: 2026-07-23 23:41:06 +05:30
 **Version**: 1.2.0
 **Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-24 00:09:12 +05:30
+
+Focus: fix browser/search commands that returned `completed` with `No actions taken`.
+
+Changed:
+
+- Broadened planner intent matching for natural browser commands.
+- Added support for:
+  - `search ... in chrome`
+  - `open YouTube`
+  - `open github.com`
+  - `close browser`
+- Added common site aliases in the planner.
+- Cleaned browser hints out of search queries.
+- URL-encoded search queries before navigation.
+- Added system-browser fallback when Playwright Chromium is unavailable.
+- Changed no-step plans to return `unsupported` instead of fake success.
+- Added PBKDF2-HMAC-SHA256 fallback when the Windows `cryptography` Argon2 binding is broken.
+- Added smoke assertions for search and browser-close planning.
+- Installed Playwright Chromium locally for structured browser automation.
+
+Current behavior:
+
+- Browser search/open should now execute through Playwright when available.
+- If Playwright browser binaries are missing, the command opens through the Windows default browser.
+- Click/type/read still require Playwright to be installed and working.
+- Verified `/command` with `search best gaming mouse in chrome` and `close browser`.
+
+Next work:
+
+- Add Playwright install/check endpoint.
+- Add screen click-by-text tools into `ai_pc_operator`.
+- Replace runtime placeholder models with real OCR/ONNX/GGUF loaders.
+
+**Last Updated**: 2026-07-24 00:09:12 +05:30
+**Version**: 1.2.1
+**Maintainer**: Screen-AI Team

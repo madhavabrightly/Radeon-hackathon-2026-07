@@ -1,5 +1,63 @@
 # Screen-AI Run Change Log
 
+## 2026-07-24 00:09:12 +05:30
+
+Purpose: make browser/search commands actually execute instead of returning `No actions taken`.
+
+### Planner
+
+- Expanded browser intent matching for natural commands:
+  - `search best air coolers in chrome`
+  - `open YouTube`
+  - `open github.com`
+  - `close browser`
+- Added common site aliases for YouTube, Google, GitHub, Gmail, Amazon, Reddit, Instagram, LinkedIn, ChatGPT, and related services.
+- Search query extraction now removes execution hints like `in chrome`, `on browser`, and `with edge`.
+
+### Browser Tool
+
+- Added URL normalization for bare domains.
+- Added query URL encoding for search commands.
+- Added fallback to the OS default browser when Playwright/Chromium is unavailable.
+
+### Router
+
+- Changed empty/no-step plans to return:
+
+```text
+status: unsupported
+```
+
+instead of:
+
+```text
+status: completed
+result: No actions taken
+```
+
+This makes planner gaps visible during testing.
+
+### Vault Compatibility
+
+- Added PBKDF2-HMAC-SHA256 fallback when the local Windows `cryptography` package has a broken Argon2 binding.
+- Argon2id remains the preferred KDF path when available.
+
+### Tests
+
+- Added smoke assertions for browser search planning and close-browser planning.
+- Installed Playwright Chromium with:
+
+```powershell
+python -m playwright install chromium
+```
+
+- Verified live API commands:
+
+```text
+search best gaming mouse in chrome
+close browser
+```
+
 ## 2026-07-23 23:41:06 +05:30
 
 Purpose: start the real RAM-aware model/tool runtime pipeline requested for Screen-AI.

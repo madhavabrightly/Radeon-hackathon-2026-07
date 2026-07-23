@@ -60,6 +60,9 @@ async def test_planner():
     test_commands = [
         "check my storage",
         "open Chrome",
+        "open YouTube",
+        "search best air coolers in chrome",
+        "close browser",
         "delete files in Downloads",
         "login to github.com",
     ]
@@ -67,6 +70,23 @@ async def test_planner():
     for command in test_commands:
         intent = await planner.classify_intent(command)
         print(f"[ok] '{command}' -> intent: {intent}")
+
+    intent = await planner.classify_intent("search best air coolers in chrome")
+    plan = await planner.create_plan("search best air coolers in chrome", intent)
+    assert intent == "search_web"
+    assert plan["steps"][0]["tool"] == "browser.search"
+    assert plan["steps"][0]["args"]["query"] == "best air coolers"
+
+    intent = await planner.classify_intent("open YouTube")
+    plan = await planner.create_plan("open YouTube", intent)
+    assert intent == "open_website"
+    assert plan["steps"][0]["tool"] == "browser.open"
+    assert plan["steps"][0]["args"]["url"] == "https://www.youtube.com"
+
+    intent = await planner.classify_intent("close browser")
+    plan = await planner.create_plan("close browser", intent)
+    assert intent == "browser_close"
+    assert plan["steps"][0]["tool"] == "browser.close"
 
 
 async def test_permissions():

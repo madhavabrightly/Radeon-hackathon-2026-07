@@ -170,11 +170,32 @@ class AgentRouter:
             # Step 6: Plan actions
             plan = await self.planner.create_plan(text, intent)
             logger.info(f"Plan: {plan}")
-            self.heatmap.record_plan(intent, plan.get("steps", []))
+            steps = plan.get("steps", [])
+            self.heatmap.record_plan(intent, steps)
+
+            if not steps:
+                message = (
+                    plan.get("error")
+                    or "I could not map that command to a safe tool plan yet."
+                )
+                response = {
+                    "command_id": command_id,
+                    "status": "unsupported",
+                    "result": message,
+                    "requires_approval": requires_approval,
+                    "runtime": tier_decision.to_dict(),
+                }
+                await self._update_command_status(
+                    command_id,
+                    "unsupported",
+                    response["result"],
+                )
+                await self.memory.add(text, intent, response)
+                return response
 
             # Step 7: Execute tools
             results = []
-            for step in plan.get("steps", []):
+            for step in steps:
                 if self.emergency_stopped:
                     break
 

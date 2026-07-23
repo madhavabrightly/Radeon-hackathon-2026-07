@@ -68,6 +68,7 @@ class RiskClassifier:
             "ram_usage": 0,
             "list_files": 0,
             "search_web": 0,
+            "browser_close": 0,
             "open_app": 1,
             "open_website": 1,
             "download_file": 2,

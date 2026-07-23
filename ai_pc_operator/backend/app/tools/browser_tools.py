@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+import webbrowser
+from urllib.parse import quote_plus, urlparse
 from typing import Dict, Any, Optional
 
 
@@ -58,6 +60,7 @@ class BrowserTools:
 
     async def open(self, url: str) -> Dict[str, Any]:
         """Open a URL in browser."""
+        url = self._normalize_url(url)
         try:
             await self._ensure_browser()
             await self.page.goto(url)
@@ -68,24 +71,22 @@ class BrowserTools:
                 "title": await self.page.title(),
             }
         except Exception as e:
-            return {
-                "status": "failed",
-                "error": str(e),
-            }
+            return await self._open_system_browser(url, error=str(e))
 
     async def search(self, query: str, engine: str = "google") -> Dict[str, Any]:
         """Search the web."""
         try:
             await self._ensure_browser()
 
+            encoded_query = quote_plus(query)
             if engine == "google":
-                url = f"https://www.google.com/search?q={query}"
+                url = f"https://www.google.com/search?q={encoded_query}"
             elif engine == "bing":
-                url = f"https://www.bing.com/search?q={query}"
+                url = f"https://www.bing.com/search?q={encoded_query}"
             elif engine == "duckduckgo":
-                url = f"https://duckduckgo.com/?q={query}"
+                url = f"https://duckduckgo.com/?q={encoded_query}"
             else:
-                url = f"https://www.google.com/search?q={query}"
+                url = f"https://www.google.com/search?q={encoded_query}"
 
             await self.page.goto(url)
             self.last_used = time.monotonic()
@@ -96,10 +97,11 @@ class BrowserTools:
                 "url": url,
             }
         except Exception as e:
-            return {
-                "status": "failed",
-                "error": str(e),
-            }
+            encoded_query = quote_plus(query)
+            url = f"https://www.google.com/search?q={encoded_query}"
+            result = await self._open_system_browser(url, error=str(e))
+            result.update({"query": query, "engine": engine})
+            return result
 
     async def click(self, selector: str) -> Dict[str, Any]:
         """Click an element by selector."""
@@ -116,6 +118,39 @@ class BrowserTools:
                 "status": "failed",
                 "error": str(e),
             }
+
+    def _normalize_url(self, url: str) -> str:
+        """Add a scheme when the planner extracted a bare domain."""
+        parsed = urlparse(url)
+        if parsed.scheme:
+            return url
+        return f"https://{url}"
+
+    async def _open_system_browser(
+        self,
+        url: str,
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fallback to the OS default browser when Playwright is unavailable."""
+        opened = await asyncio.to_thread(webbrowser.open, url)
+        if opened:
+            response = {
+                "status": "success",
+                "url": url,
+                "mode": "system-browser-fallback",
+            }
+            if error:
+                response["warning"] = (
+                    "Playwright browser was unavailable; opened with the "
+                    f"system browser instead. Details: {error}"
+                )
+            return response
+
+        return {
+            "status": "failed",
+            "url": url,
+            "error": error or "System browser refused the URL",
+        }
 
     async def type(self, selector: str, text: str) -> Dict[str, Any]:
         """Type text into an element."""

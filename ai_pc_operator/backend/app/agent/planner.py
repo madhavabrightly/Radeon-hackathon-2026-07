@@ -13,6 +13,23 @@ from typing import Dict, Any, List, Optional
 class Planner:
     """Command planner."""
 
+    SITE_ALIASES = {
+        "amazon": "https://www.amazon.com",
+        "bing": "https://www.bing.com",
+        "chatgpt": "https://chatgpt.com",
+        "edge": "https://www.microsoft.com/edge",
+        "facebook": "https://www.facebook.com",
+        "gmail": "https://mail.google.com",
+        "google": "https://www.google.com",
+        "github": "https://github.com",
+        "instagram": "https://www.instagram.com",
+        "linkedin": "https://www.linkedin.com",
+        "reddit": "https://www.reddit.com",
+        "twitter": "https://x.com",
+        "x": "https://x.com",
+        "youtube": "https://www.youtube.com",
+    }
+
     def __init__(self):
         """Initialize planner with rule-based patterns."""
         self.intent_patterns = self._load_patterns()
@@ -42,17 +59,24 @@ class Planner:
                 r"\b(delete|remove|clean)\b.*\b(files?|folder|directory)\b",
                 r"\bempty\b.*\b(folder|directory|trash)\b",
             ],
-            "open_app": [
-                r"\b(open|launch|start|run)\b.*\b(app|application|program)\b",
-                r"\bopen\b\s+\w+",
-            ],
             "open_website": [
                 r"\b(open|go to|navigate to|visit)\b.*\b(website|url|site)\b",
+                r"\b(open|go to|navigate to|visit)\b\s+([a-zA-Z0-9.-]+\.[a-z]{2,}|amazon|bing|chatgpt|facebook|gmail|google|github|instagram|linkedin|reddit|twitter|x|youtube)\b",
                 r"\bhttps?://\S+",
             ],
             "search_web": [
                 r"\b(search|google|find)\b.*\b(web|internet|online)\b",
                 r"\bsearch\b\s+for\b",
+                r"\b(search|google|find|look up|lookup)\b.+",
+                r"\b(search|google|find|look up|lookup)\b.*\b(in|on|with)\s+(chrome|edge|browser|google|bing)\b",
+            ],
+            "browser_close": [
+                r"\b(close|quit|exit)\b.*\b(browser|chrome|edge|tab)\b",
+                r"\b(close|quit|exit)\b\s+(browser|chrome|edge)\b",
+            ],
+            "open_app": [
+                r"\b(open|launch|start|run)\b.*\b(app|application|program)\b",
+                r"\bopen\b\s+\w+",
             ],
             "download_file": [
                 r"\b(download|get|fetch)\b.*\b(file|program|app)\b",
@@ -155,6 +179,13 @@ class Planner:
                 ]
             }
 
+        elif intent == "browser_close":
+            return {
+                "steps": [
+                    {"tool": "browser.close", "args": {}},
+                ]
+            }
+
         elif intent == "download_file":
             url = self._extract_url(text)
             return {
@@ -228,19 +259,33 @@ class Planner:
         if domain_match:
             return f"https://{domain_match.group(0)}"
 
+        text_lower = text.lower()
+        for name, url in self.SITE_ALIASES.items():
+            if re.search(rf"\b{name}\b", text_lower):
+                return url
+
         return "https://www.google.com"
 
     def _extract_search_query(self, text: str) -> str:
         """Extract search query from text."""
         # Remove "search for" etc.
         query = re.sub(
-            r"\b(search|google|find|for|on the web|online)\b",
+            r"\b(search|google|find|look up|lookup|for|on the web|online)\b",
             "",
             text,
             flags=re.IGNORECASE,
         ).strip()
 
-        return query
+        query = re.sub(
+            r"\b(in|on|with)\s+(chrome|edge|browser|google|bing)\b",
+            "",
+            query,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        query = re.sub(r"\s+", " ", query).strip(" ?.")
+
+        return query or text.strip()
 
     def _extract_site(self, text: str) -> str:
         """Extract site name from login command."""
