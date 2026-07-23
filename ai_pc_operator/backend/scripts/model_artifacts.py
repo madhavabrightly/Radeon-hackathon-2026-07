@@ -4,6 +4,7 @@ Examples:
     python scripts/model_artifacts.py inventory
     python scripts/model_artifacts.py stage-yolo path/to/ui_detector_int8.onnx
     python scripts/model_artifacts.py stage-gguf path/to/qwen.gguf
+    python scripts/model_artifacts.py list-files
 """
 
 from __future__ import annotations
@@ -28,6 +29,15 @@ MODEL_DIR = ROOT / "ai_pc_operator" / "data" / "models"
 def inventory(_: argparse.Namespace) -> int:
     store = ArtifactStore()
     print(json.dumps(store.inventory(), indent=2))
+    return 0
+
+
+def list_files(_: argparse.Namespace) -> int:
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    for path in sorted(MODEL_DIR.rglob("*")):
+        if path.is_file():
+            size_mb = path.stat().st_size / (1024**2)
+            print(f"{size_mb:8.2f} MB  {path.relative_to(MODEL_DIR)}")
     return 0
 
 
@@ -58,6 +68,9 @@ def main() -> int:
 
     inv = sub.add_parser("inventory", help="show discovered artifacts")
     inv.set_defaults(func=inventory)
+
+    files = sub.add_parser("list-files", help="list files saved under the model directory")
+    files.set_defaults(func=list_files)
 
     yolo = sub.add_parser("stage-yolo", help="copy exported YOLO ONNX into backend model dir")
     yolo.add_argument("source", type=Path)

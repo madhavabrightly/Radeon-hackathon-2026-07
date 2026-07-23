@@ -6,6 +6,8 @@ runs/
 data/certs/
 *.pt
 *.onnx
+*.gguf
+*.part
 *.safetensors
 OmniParser/
 screen_element_scanner/output/

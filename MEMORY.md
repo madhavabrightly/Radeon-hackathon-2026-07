@@ -595,3 +595,35 @@ PID seen during verification: 22372
 **Last Updated**: 2026-07-24 01:50:32 +05:30
 **Version**: 1.3.1
 **Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-24 02:10:11 +05:30
+
+Focus: install real model artifacts into the project model directory.
+
+Model directory:
+
+```text
+ai_pc_operator/data/models/
+```
+
+Added downloader:
+
+```powershell
+python .\ai_pc_operator\backend\scripts\download_models.py
+```
+
+Artifacts selected for low-resource hackathon runtime:
+
+- Qwen2.5 Coder 1.5B GGUF Q4_0 for local LLM planning.
+- PaddleOCR ONNX detection and English recognition files for OCR artifacts.
+- OmniParser V2 icon detector `.pt` as a teacher/cloud distillation artifact.
+
+Notes:
+
+- Active 4 GB laptop runtime should use GGUF + ONNX artifacts.
+- OmniParser teacher weights are for cloud distillation/export, not normal laptop startup.
+- The final `ui_detector_int8.onnx` still needs to be produced by the cloud AMD/ROCm pipeline and staged into `ai_pc_operator/data/models/`.
+
+**Last Updated**: 2026-07-24 02:10:11 +05:30
+**Version**: 1.3.2
+**Maintainer**: Screen-AI Team

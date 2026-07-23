@@ -32,7 +32,12 @@ class ArtifactStore:
     ]
 
     PATTERNS = {
-        "ocr-mobile": ("*.pdmodel", "*.onnx"),
+        "ocr-mobile": (
+            "ocr_det*.onnx",
+            "ocr_rec*.onnx",
+            "paddleocr*.onnx",
+            "*.pdmodel",
+        ),
         "ui-detector-int8": ("*ui*detector*.onnx", "*int8*.onnx", "best.onnx"),
         "qwen-1.5b-q4": ("*qwen*.gguf", "*1.5b*.gguf", "*.gguf"),
         "vault-crypto": (),
@@ -50,14 +55,7 @@ class ArtifactStore:
 
     def find(self, name: str) -> Artifact | None:
         """Return the best artifact for a registered model name."""
-        patterns = self.PATTERNS.get(name, ())
-        candidates: list[Path] = []
-        for root in self.search_dirs:
-            if not root.exists():
-                continue
-            for pattern in patterns:
-                candidates.extend(path for path in root.rglob(pattern) if path.is_file())
-
+        candidates = self.find_all(name)
         if not candidates:
             return None
 
@@ -70,6 +68,21 @@ class ArtifactStore:
             reverse=True,
         )
         path = candidates[0]
+        return self._artifact(name, path)
+
+    def find_all(self, name: str) -> list[Path]:
+        """Return every artifact path matching a registered model name."""
+        patterns = self.PATTERNS.get(name, ())
+        candidates: list[Path] = []
+        for root in self.search_dirs:
+            if not root.exists():
+                continue
+            for pattern in patterns:
+                candidates.extend(path for path in root.rglob(pattern) if path.is_file())
+
+        return list(dict.fromkeys(candidates))
+
+    def _artifact(self, name: str, path: Path) -> Artifact:
         return Artifact(
             name=name,
             kind=path.suffix.lower().lstrip("."),

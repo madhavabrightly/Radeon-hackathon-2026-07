@@ -1,5 +1,47 @@
 # Screen-AI Run Change Log
 
+## 2026-07-24 02:10:11 +05:30
+
+Purpose: install/save project model artifacts and make the model folder reproducible.
+
+### Changes
+
+- Added `ai_pc_operator/backend/scripts/download_models.py`.
+- Downloader saves active local models under:
+
+```text
+ai_pc_operator/data/models/
+```
+
+- Added a generated `models_manifest.json` describing source URLs, roles, and file paths.
+- Added `model_artifacts.py list-files`.
+- Tightened OCR artifact discovery so OCR does not accidentally pick unrelated ONNX detector files.
+- OCR loader now loads ONNX OCR artifacts through ONNX Runtime before falling back to PaddleOCR.
+- Added optional runtime dependencies:
+  - `onnxruntime`
+  - `llama-cpp-python`
+
+### Selected Artifacts
+
+- Qwen2.5 Coder 1.5B GGUF Q4_0 for local planning.
+- PaddleOCR ONNX detection and English recognition files for OCR.
+- OmniParser V2 icon detector `.pt` as a teacher/cloud artifact for later INT8 ONNX distillation.
+
+### Important Note
+
+`ui_detector_int8.onnx` is still produced by our cloud distillation/export pipeline. The public OmniParser detector is PyTorch `.pt`, so it is saved as a teacher artifact instead of being mislabelled as the laptop INT8 ONNX runtime model.
+
+### Verification
+
+```text
+download_models.py: downloaded Qwen GGUF, OCR ONNX files, OmniParser teacher files
+py_compile artifact/model scripts and loaders: pass
+model_artifacts.py inventory: pass
+model_artifacts.py list-files: pass
+OCR ONNX loader smoke test: pass
+Qwen llama.cpp loader smoke test: pass
+```
+
 ## 2026-07-24 02:01:49 +05:30
 
 Purpose: fix mobile `Camera API unavailable` by adding a local HTTPS server.

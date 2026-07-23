@@ -1485,3 +1485,31 @@ POST /pair/qr/complete
 POST /auth/rotate
 POST /pair/trusted
 ```
+
+## Model Artifacts: 2026-07-24 02:10:11 +05:30
+
+Runtime model files live in:
+
+```text
+ai_pc_operator/data/models/
+```
+
+Downloader:
+
+```powershell
+python .\ai_pc_operator\backend\scripts\download_models.py
+python .\ai_pc_operator\backend\scripts\model_artifacts.py inventory
+python .\ai_pc_operator\backend\scripts\model_artifacts.py list-files
+```
+
+Selected lightweight artifacts:
+
+- `qwen2.5-coder-1.5b-instruct-q4_0.gguf` from `Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF` for local llama.cpp planning.
+- `ocr_det_v3.onnx` and `ocr_rec_english.onnx` from `monkt/paddleocr-onnx` for light ONNX OCR.
+- `teachers/omniparser_v2_icon_detect.pt` from `microsoft/OmniParser-v2.0` for cloud teacher/distillation work.
+
+Important:
+
+- Do not commit model binaries. `.gitignore` excludes `*.gguf`, `*.onnx`, and `*.pt`.
+- `ui_detector_int8.onnx` is still expected to come from our cloud distillation/export pipeline.
+- The OmniParser `.pt` teacher model is saved for cloud use, but the 4 GB laptop runtime should load the exported INT8 ONNX detector.

@@ -24,6 +24,10 @@ pyautogui==0.9.54
 opencv-python==4.8.1.78
 numpy==1.26.2
 pillow==10.1.0
+onnxruntime==1.18.1
+
+# Optional local LLM runtime for GGUF planner models
+llama-cpp-python==0.2.90
 
 # HTTP
 requests==2.31.0

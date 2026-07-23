@@ -22,10 +22,40 @@ def _missing(name: str, reason: str, artifact: dict | None = None) -> dict[str, 
 
 
 def ocr_mobile_loader(store: ArtifactStore) -> Loader:
-    """Load PaddleOCR if installed; otherwise expose artifact/dependency status."""
+    """Load ONNX OCR artifacts first; fall back to PaddleOCR if installed."""
 
     def load() -> dict[str, Any]:
         artifact = store.find("ocr-mobile")
+        onnx_paths = [path for path in store.find_all("ocr-mobile") if path.suffix.lower() == ".onnx"]
+        if onnx_paths:
+            try:
+                import onnxruntime as ort
+            except Exception as exc:
+                return _missing(
+                    "ocr-mobile",
+                    f"onnxruntime not installed or failed to import: {exc}",
+                    artifact.to_dict() if artifact else None,
+                )
+
+            sessions = {
+                path.name: ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+                for path in onnx_paths
+            }
+            return {
+                "name": "ocr-mobile",
+                "status": "loaded",
+                "backend": "onnxruntime",
+                "artifacts": [
+                    {
+                        "path": str(path),
+                        "size_mb": round(path.stat().st_size / (1024**2), 2),
+                    }
+                    for path in onnx_paths
+                ],
+                "model": sessions,
+                "loaded_at": time.time(),
+            }
+
         try:
             from paddleocr import PaddleOCR
         except Exception as exc:
