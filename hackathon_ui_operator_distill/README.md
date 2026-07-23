@@ -87,6 +87,14 @@ It runs:
 - optional INT8 ONNX tiny UI detector
 - OCR only when text matching is needed
 
+It also includes a `codiii`-inspired SSD tiering strategy:
+
+```text
+resident scanner -> warm OCR/detector -> SSD cold parser -> AMD cloud teacher
+```
+
+See `docs/codiii_ssd_tiering_strategy.md`.
+
 ## Main Local Goal
 
 ```powershell
