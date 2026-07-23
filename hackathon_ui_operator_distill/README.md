@@ -95,6 +95,14 @@ resident scanner -> warm OCR/detector -> SSD cold parser -> AMD cloud teacher
 
 See `docs/codiii_ssd_tiering_strategy.md`.
 
+And a Colibri-style GPU backend methodology:
+
+```text
+CPU default + optional CUDA/HIP acceleration through one compatibility shim
+```
+
+See `docs/gpu_backend_methodology.md` and `native/gpu_compat.h`.
+
 ## Main Local Goal
 
 ```powershell
