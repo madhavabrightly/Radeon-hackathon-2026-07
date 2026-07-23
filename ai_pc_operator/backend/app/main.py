@@ -191,6 +191,10 @@ async def root():
         "name": "AI PC Operator",
         "version": "0.1.0",
         "status": "running",
+        "pc_pairing_page": "/remote/pair.html",
+        "mobile_remote": "/remote/index.html",
+        "pairing_code_api": "/pair/code",
+        "pairing_qr_api": "/pair/qr",
     }
 
 

@@ -353,3 +353,52 @@ All passed.
 
 - Earlier timed-out test runs left stale Python processes holding the SQLite DB lock. Those processes were stopped before the final successful smoke test.
 - `aiosqlite==0.19.0` was installed locally to run the backend smoke test.
+## 2026-07-24 01:55:28 +05:30
+
+Purpose: add the missing PC QR display page and make the pairing links obvious.
+
+### Links
+
+- PC QR display page:
+
+```text
+http://localhost:8000/remote/pair.html
+```
+
+- Mobile remote/scanner page:
+
+```text
+http://localhost:8000/remote/index.html
+```
+
+### Changes
+
+- Added `ai_pc_operator/frontend/pair.html`.
+- The PC page fetches:
+  - `GET /pair/qr`
+  - `GET /pair/code`
+- The PC page renders:
+  - scan-ready QR code
+  - fallback 6-digit code
+  - mobile remote link
+  - raw QR payload for debugging
+- The root endpoint now advertises:
+  - `pc_pairing_page`
+  - `mobile_remote`
+  - `pairing_code_api`
+  - `pairing_qr_api`
+
+### Important Note
+
+The MVP QR pairing does not require mobile browser X25519 support. It returns a local session token, while encrypted token metadata remains optional.
+
+### Verification
+
+```text
+python -m py_compile ai_pc_operator/backend/app/main.py : pass
+node --check ai_pc_operator/frontend/app.js : pass
+GET /remote/pair.html : pass
+GET /remote/index.html : pass
+GET /pair/qr : pass
+GET / : pass
+```
