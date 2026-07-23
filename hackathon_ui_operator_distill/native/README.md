@@ -35,3 +35,15 @@ make hip HIP_ARCH=gfx1201
 
 For the first working hackathon demo, Python/OpenCV/ONNXRuntime remains the implementation path. This native layer is the roadmap for optimized ROCm/CUDA parity.
 
+## SSD Tier Policy
+
+`ssd_tier_policy.c` is a tiny C reference for the codiii-style hot-store decision:
+
+```text
+resident core + warm LFRU cache + SSD-cold artifacts
+```
+
+It chooses whether a hotter cold item should replace the weakest resident slot
+using a frequency + recency score with hysteresis. The Python runtime currently
+implements the live orchestration; this C policy is the native migration path for
+low-overhead tier decisions.

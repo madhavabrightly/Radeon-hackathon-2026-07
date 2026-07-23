@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable
 
 from app.runtime.io_pool import IOPool
 from app.runtime.resource_budget import ResourceBudget
+from app.runtime.ssd_tier import SSDTierManager
 
 
 Loader = Callable[[], Any]
@@ -33,9 +34,15 @@ class LoadedModel:
 class ModelRegistry:
     """Registers lazy model loaders and prefetches likely hot models."""
 
-    def __init__(self, budget: ResourceBudget, io_pool: IOPool) -> None:
+    def __init__(
+        self,
+        budget: ResourceBudget,
+        io_pool: IOPool,
+        ssd_tier: SSDTierManager | None = None,
+    ) -> None:
         self.budget = budget
         self.io_pool = io_pool
+        self.ssd_tier = ssd_tier
         self.specs: dict[str, ModelSpec] = {}
         self.loaded: dict[str, LoadedModel] = {}
         self.loading: dict[str, asyncio.Task[Any]] = {}
@@ -53,6 +60,8 @@ class ModelRegistry:
             return None
         if not self.budget.can_load(spec.estimated_mb):
             return None
+        if self.ssd_tier:
+            self.ssd_tier.record_use(name)
 
         task = self.loading.get(name)
         if task is None:
@@ -71,6 +80,8 @@ class ModelRegistry:
                 continue
             spec = self.specs.get(name)
             if spec is None or not self.budget.can_load(spec.estimated_mb):
+                continue
+            if spec.estimated_mb >= 900:
                 continue
             self.loading[name] = asyncio.create_task(self.io_pool.run(spec.loader))
 

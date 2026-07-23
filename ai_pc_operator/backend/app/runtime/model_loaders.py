@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Callable
 
@@ -134,11 +135,16 @@ def qwen_gguf_loader(store: ArtifactStore) -> Loader:
                 artifact.to_dict(),
             )
 
+        n_ctx = int(os.environ.get("SCREEN_AI_LLM_CTX", "768"))
+        n_threads = int(os.environ.get("SCREEN_AI_LLM_THREADS", "2"))
         model = Llama(
             model_path=artifact.path,
-            n_ctx=2048,
-            n_threads=4,
+            n_ctx=n_ctx,
+            n_threads=n_threads,
             n_gpu_layers=0,
+            use_mmap=os.environ.get("SCREEN_AI_MMAP", "1") != "0",
+            use_mlock=False,
+            n_batch=128,
             verbose=False,
         )
         return {
@@ -146,6 +152,9 @@ def qwen_gguf_loader(store: ArtifactStore) -> Loader:
             "status": "loaded",
             "backend": "llama.cpp",
             "artifact": artifact.to_dict(),
+            "mmap": os.environ.get("SCREEN_AI_MMAP", "1") != "0",
+            "n_ctx": n_ctx,
+            "n_threads": n_threads,
             "model": model,
             "loaded_at": time.time(),
         }

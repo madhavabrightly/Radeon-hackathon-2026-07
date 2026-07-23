@@ -235,6 +235,11 @@ async def runtime_status():
         raise HTTPException(status_code=503, detail="Server not ready")
 
     budget = agent_router.resource_budget.measure()
+    ssd_plan = agent_router.ssd_tier.plan(
+        budget,
+        agent_router.artifacts,
+        agent_router.resource_budget.reserve_mb,
+    )
     return {
         "memory": {
             "available_mb": budget.available_mb,
@@ -245,6 +250,8 @@ async def runtime_status():
             "allow_llm": budget.allow_llm,
         },
         "models": agent_router.model_registry.status(),
+        "ssd_tier": ssd_plan.to_dict(),
+        "ssd_usage": agent_router.ssd_tier.status(),
         "artifacts": agent_router.artifacts.inventory(),
         "screen_cache": agent_router.screen_cache.stats(),
     }

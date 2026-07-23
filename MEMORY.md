@@ -667,3 +667,29 @@ Remaining:
 **Last Updated**: 2026-07-24 02:25:43 +05:30
 **Version**: 1.3.3
 **Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-24 02:33:30 +05:30
+
+Focus: implement the codiii-inspired SSD tiering strategy for 4 GB no-GPU laptops.
+
+Added:
+
+- `SSDTierManager` for resident/warm/SSD-cold/SSD-off placement.
+- `SCREEN_AI_RAM_MB` low-memory override.
+- `SCREEN_AI_MMAP`, `SCREEN_AI_PREFETCH`, `SCREEN_AI_ALLOW_COLD_LLM`, `SCREEN_AI_LLM_CTX`, and `SCREEN_AI_LLM_THREADS` runtime knobs.
+- llama.cpp Qwen loader now defaults to mmap, low context, low batch, and two CPU threads.
+- Model usage heat persists in `ai_pc_operator/data/memory/model_usage.json`.
+- Large models are never prefetched.
+- `/runtime` exposes SSD plan and usage.
+- Native C LFRU/hysteresis tier policy scaffold in `hackathon_ui_operator_distill/native/`.
+
+4 GB policy:
+
+- Keep the rule planner, mobile remote, UIA scanner, and OpenCV resident/light.
+- Keep Qwen on SSD/off by default.
+- Load OCR/detector only when memory budget permits.
+- Run OmniParser/training/export on cloud AMD/ROCm, then stage tiny INT8 ONNX locally.
+
+**Last Updated**: 2026-07-24 02:33:30 +05:30
+**Version**: 1.3.4
+**Maintainer**: Screen-AI Team

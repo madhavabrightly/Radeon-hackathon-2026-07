@@ -155,6 +155,28 @@ The machine keeps only:
 
 Heavy models can stay on SSD or cloud until needed.
 
+## Implemented Runtime Knobs
+
+The backend now exposes a live Screen-AI adaptation of these ideas:
+
+```powershell
+$env:SCREEN_AI_RAM_MB="1200"
+$env:SCREEN_AI_MMAP="1"
+$env:SCREEN_AI_PREFETCH="0"
+$env:SCREEN_AI_ALLOW_COLD_LLM="0"
+$env:SCREEN_AI_LLM_CTX="512"
+$env:SCREEN_AI_LLM_THREADS="2"
+```
+
+The runtime maps these to:
+
+- resident: rules, router, UIA/OpenCV scanner
+- warm: small OCR/detector artifacts
+- SSD-cold: optional mmap-loaded GGUF or model artifacts
+- SSD-off: too heavy for current memory budget
+
+`GET /runtime` reports the current placement plan.
+
 ## Hackathon Story
 
 Screen-AI is not just a desktop clicker.
@@ -168,4 +190,3 @@ low-resource local control
 ```
 
 This directly follows the spirit of `codiii`: use storage intelligently so weaker hardware can still access stronger AI capability.
-

@@ -1551,3 +1551,34 @@ test_login_v2.py: pass
 ScreenTools.scan: 226 actionable controls
 ScreenTools.click_text("Close", dry_run=True): success
 ```
+
+## 4 GB SSD Tier Runtime: 2026-07-24 02:33:30 +05:30
+
+Screen-AI adapts the `codiii`/colibri memory hierarchy like this:
+
+```text
+codiii:
+  dense core in RAM -> hot experts pinned -> routed experts streamed from SSD
+
+Screen-AI:
+  rules/UIA/OpenCV resident -> OCR/detector warm -> Qwen/teacher artifacts SSD-cold/off -> AMD cloud teacher
+```
+
+Runtime knobs:
+
+```powershell
+$env:SCREEN_AI_RAM_MB="1200"          # optional low-RAM override/test
+$env:SCREEN_AI_MMAP="1"              # mmap GGUF through llama.cpp
+$env:SCREEN_AI_PREFETCH="0"          # safest for 4 GB
+$env:SCREEN_AI_ALLOW_COLD_LLM="0"    # keep Qwen off unless explicitly enabled
+$env:SCREEN_AI_LLM_CTX="512"
+$env:SCREEN_AI_LLM_THREADS="2"
+```
+
+Rules:
+
+- Large models are never speculative-prefetched.
+- Qwen defaults to SSD/off on low RAM.
+- OCR/detector are lazy and evictable.
+- `/runtime` is the source of truth for current model placement.
+- Native C LFRU policy exists under `hackathon_ui_operator_distill/native/ssd_tier_policy.c` for future low-overhead promotion decisions.

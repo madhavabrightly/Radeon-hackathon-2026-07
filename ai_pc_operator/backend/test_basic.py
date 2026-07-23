@@ -195,6 +195,32 @@ async def test_runtime_pipeline():
     print(f"[ok] Tier decision: {decision.tier} ({decision.reason})")
 
 
+async def test_ssd_tier_plan():
+    """Test codiii-inspired SSD tier planning for 4GB machines."""
+    from app.runtime.artifact_store import ArtifactStore
+    from app.runtime.resource_budget import ResourceBudget
+    from app.runtime.ssd_tier import SSDTierManager
+    import os
+
+    print("\nTesting SSD tier plan...")
+    previous = os.environ.get("SCREEN_AI_RAM_MB")
+    os.environ["SCREEN_AI_RAM_MB"] = "1400"
+    try:
+        budgeter = ResourceBudget()
+        budget = budgeter.measure()
+        plan = SSDTierManager().plan(budget, ArtifactStore(), budgeter.reserve_mb)
+        qwen = plan.placements["qwen-1.5b-q4"]
+        assert qwen.tier == "ssd-off"
+        assert not qwen.prefetch
+        assert plan.placements["vault-crypto"].tier == "resident"
+        print(f"[ok] SSD tier mode: {plan.mode}, qwen tier: {qwen.tier}")
+    finally:
+        if previous is None:
+            os.environ.pop("SCREEN_AI_RAM_MB", None)
+        else:
+            os.environ["SCREEN_AI_RAM_MB"] = previous
+
+
 async def test_model_artifacts_and_prompts():
     """Test model artifact discovery, loaders, screen cache, and prompt wiring."""
     from app.agent.llm_planner import LLMPlanner
@@ -260,6 +286,7 @@ async def main():
         await test_vault()
         await test_redactor()
         await test_runtime_pipeline()
+        await test_ssd_tier_plan()
         await test_model_artifacts_and_prompts()
         await test_pairing_token_verification()
 

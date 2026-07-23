@@ -36,6 +36,7 @@ from app.runtime.model_loaders import (
 from app.runtime.model_registry import ModelRegistry, ModelSpec
 from app.runtime.resource_budget import ResourceBudget
 from app.runtime.screen_cache import ScreenCache
+from app.runtime.ssd_tier import SSDTierManager
 from app.runtime.tier_manager import AgentTierManager
 
 logger = logging.getLogger(__name__)
@@ -64,8 +65,9 @@ class AgentRouter:
         self.resource_budget = ResourceBudget()
         self.io_pool = IOPool(max_workers=2)
         self.artifacts = ArtifactStore()
+        self.ssd_tier = SSDTierManager()
         self.screen_cache = ScreenCache()
-        self.model_registry = ModelRegistry(self.resource_budget, self.io_pool)
+        self.model_registry = ModelRegistry(self.resource_budget, self.io_pool, self.ssd_tier)
         self.heatmap = ToolHeatMap()
         self.tier_manager = AgentTierManager()
         self._register_lazy_models()
@@ -140,10 +142,16 @@ class AgentRouter:
             )
             intent = await self.planner.classify_intent(text)
             budget = await budget_task
+            ssd_plan = self.ssd_tier.plan(
+                budget,
+                self.artifacts,
+                self.resource_budget.reserve_mb,
+            )
             logger.info(f"Intent: {intent}")
 
             llm_plan: Dict[str, Any] | None = None
-            if intent == "unknown" and budget.allow_llm:
+            qwen_allowed = self.ssd_tier.can_load("qwen-1.5b-q4", ssd_plan)
+            if intent == "unknown" and budget.allow_llm and qwen_allowed:
                 qwen = await self.model_registry.get("qwen-1.5b-q4")
                 llm_plan = await self.llm_planner.create_plan(text, qwen)
                 if llm_plan:
@@ -156,7 +164,12 @@ class AgentRouter:
             )
             hot_models = self.heatmap.hot_models_for_intent(intent)
             tier_decision = self.tier_manager.decide(intent, budget, hot_models)
-            self.model_registry.prefetch(tier_decision.prefetch_models)
+            prefetch_models = [
+                name
+                for name in tier_decision.prefetch_models
+                if self.ssd_tier.should_prefetch(name, ssd_plan)
+            ]
+            self.model_registry.prefetch(prefetch_models)
             self._prefetch_hot_tools(self.heatmap.hot_tools(intent), budget.model_budget_mb)
             risk_level = await risk_task
             if llm_plan:
@@ -214,6 +227,7 @@ class AgentRouter:
                     "result": message,
                     "requires_approval": requires_approval,
                     "runtime": tier_decision.to_dict(),
+                    "ssd_tier": ssd_plan.to_dict(),
                 }
                 await self._update_command_status(
                     command_id,
@@ -245,6 +259,7 @@ class AgentRouter:
                 "result": self._format_results(results),
                 "requires_approval": requires_approval,
                 "runtime": tier_decision.to_dict(),
+                "ssd_tier": ssd_plan.to_dict(),
             }
 
             await self._update_command_status(

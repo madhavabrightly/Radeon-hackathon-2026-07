@@ -1,5 +1,53 @@
 # Screen-AI Run Change Log
 
+## 2026-07-24 02:33:30 +05:30
+
+Purpose: adapt the `codiii`/colibri SSD-tiering strategy for a 4 GB no-GPU Screen-AI runtime.
+
+### Implemented Strategy
+
+- Added `app/runtime/ssd_tier.py`.
+- Runtime now plans model placement as:
+  - `resident`: rule planner, UIA scanner, tiny warmups
+  - `warm`: OCR/detector when RAM budget allows
+  - `ssd-cold`: artifacts stay on SSD and lazy-load only when needed
+  - `ssd-off`: too heavy for current RAM profile
+- Qwen GGUF now uses llama.cpp `use_mmap=True`, smaller default context, smaller batch, and two CPU threads.
+- Qwen is not prefetched and is kept `ssd-off` by default on low-RAM profiles unless `SCREEN_AI_ALLOW_COLD_LLM=1`.
+- `SCREEN_AI_RAM_MB` can simulate or force a low-memory budget for testing.
+- `/runtime` now reports the SSD tier plan and usage stats.
+- `ModelRegistry` records model usage heat and refuses large speculative prefetches.
+
+### codiii Ideas Adapted
+
+- `RAM_GB` equivalent: `SCREEN_AI_RAM_MB`
+- `COLI_MMAP` equivalent: `SCREEN_AI_MMAP`
+- `PREFETCH` equivalent: `SCREEN_AI_PREFETCH`
+- hot-store usage stats: `ai_pc_operator/data/memory/model_usage.json`
+- LFRU/hysteresis native policy: `hackathon_ui_operator_distill/native/ssd_tier_policy.c`
+
+### 4 GB Recommended Runtime
+
+```powershell
+$env:SCREEN_AI_RAM_MB="1200"
+$env:SCREEN_AI_MMAP="1"
+$env:SCREEN_AI_PREFETCH="0"
+$env:SCREEN_AI_ALLOW_COLD_LLM="0"
+$env:SCREEN_AI_LLM_CTX="512"
+$env:SCREEN_AI_LLM_THREADS="2"
+```
+
+### Result
+
+On a 4 GB no-GPU laptop, the app should run as a lightweight operator:
+
+```text
+UIA/OpenCV/rules always available
+OCR/detector lazy only if RAM allows
+Qwen stays on SSD/off by default
+OmniParser/training stays cloud-only
+```
+
 ## 2026-07-24 02:25:43 +05:30
 
 Purpose: close the unresolved codebase-analysis gaps that could break the hackathon demo or weaken local security.

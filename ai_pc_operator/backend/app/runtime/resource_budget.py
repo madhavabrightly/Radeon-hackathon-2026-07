@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,18 @@ class ResourceBudget:
         return budget
 
     def snapshot(self) -> MemorySnapshot:
+        override = os.environ.get("SCREEN_AI_RAM_MB")
+        if override:
+            try:
+                available = max(0, int(override))
+                return MemorySnapshot(
+                    total_mb=max(available, 4096),
+                    available_mb=available,
+                    percent_used=0.0,
+                )
+            except ValueError:
+                pass
+
         try:
             import psutil
 
@@ -74,4 +87,3 @@ class ResourceBudget:
         if model_budget >= 160:
             return "ocr-only"
         return "tier0-only"
-
