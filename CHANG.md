@@ -1,5 +1,96 @@
 # Screen-AI Run Change Log
 
+## 2026-07-24 00:19:07 +05:30
+
+Purpose: address the five missing runtime integrations: model placeholders, unused prompts, missing artifact discovery, unwired screen cache, and unused log redaction.
+
+### Model Loaders
+
+- Added `app/runtime/artifact_store.py`.
+- Added `app/runtime/model_loaders.py`.
+- Removed `placeholder_loader` from the live registry path.
+- Registered real optional loaders for:
+  - `ocr-mobile`
+  - `ui-detector-int8`
+  - `qwen-1.5b-q4`
+  - `vault-crypto`
+  - `browser-warmup`
+
+The loaders are dependency/artifact aware. They return an unavailable status with a reason instead of crashing on 4 GB machines without the heavy packages installed.
+
+### Prompt / LLM Planning
+
+- Added `app/agent/llm_planner.py`.
+- `LLMPlanner` imports and uses:
+  - `SYSTEM_PROMPT`
+  - `USER_PROMPT_TEMPLATE`
+- `AgentRouter` now attempts local LLM planning only when:
+  - rule planner returns `unknown`
+  - RAM budget allows `qwen-1.5b-q4`
+  - the GGUF model loader returns a loaded model
+
+### Artifact Discovery
+
+- Added model staging/inventory CLI:
+
+```powershell
+python .\ai_pc_operator\backend\scripts\model_artifacts.py inventory
+python .\ai_pc_operator\backend\scripts\model_artifacts.py stage-yolo <ui_detector_int8.onnx>
+python .\ai_pc_operator\backend\scripts\model_artifacts.py stage-gguf <qwen.gguf>
+```
+
+- Search locations:
+  - `ai_pc_operator/data/models`
+  - `hackathon_ui_operator_distill/data`
+  - `hackathon_ui_operator_distill/runs`
+  - `SCREEN_AI_MODEL_DIR`
+
+### Screen Cache
+
+- Added backend `app/runtime/screen_cache.py`.
+- Cache hierarchy:
+
+```text
+ai_pc_operator/data/.screen_ai_cache/
+  ui_maps/
+  ocr_results/
+  detector_results/
+```
+
+- `AgentRouter` now writes redacted plan metadata into the cache.
+- `/runtime` reports screen cache stats.
+
+### Log Redaction
+
+- `LogRedactor` is now installed as a logging filter in `main.py`.
+- Router redacts:
+  - command text saved to DB
+  - approval target/description
+  - action input JSON
+  - action output JSON
+  - memory entries
+  - action errors
+- Nested dict/list redaction now works.
+
+### API
+
+- `/runtime` now returns:
+  - memory budget
+  - registered/loading/loaded model details
+  - artifact inventory
+  - screen cache stats
+
+### Verification
+
+```text
+python -m py_compile ... : pass
+python -u .\ai_pc_operator\backend\test_basic.py : pass
+python .\ai_pc_operator\backend\scripts\model_artifacts.py inventory : pass
+GET /runtime : pass
+POST /command search best air coolers in chrome : pass
+POST /command close browser : pass
+```
+
 ## 2026-07-24 00:09:12 +05:30
 
 Purpose: make browser/search commands actually execute instead of returning `No actions taken`.

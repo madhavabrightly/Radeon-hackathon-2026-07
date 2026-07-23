@@ -156,6 +156,12 @@ async def test_redactor():
     redacted_dict = redactor.redact_dict(test_dict)
     print(f"[ok] Dict redacted: {redacted_dict}")
 
+    nested = {"steps": [{"args": {"token": "abc", "text": "password=\"secret\""}}]}
+    nested_redacted = redactor.redact_dict(nested)
+    assert nested_redacted["steps"][0]["args"]["token"] == "[REDACTED]"
+    assert "secret" not in nested_redacted["steps"][0]["args"]["text"]
+    print("[ok] Nested plan redaction works")
+
 
 async def test_runtime_pipeline():
     """Test RAM budget, heat map, and tier decisions."""
@@ -176,6 +182,40 @@ async def test_runtime_pipeline():
     print(f"[ok] Tier decision: {decision.tier} ({decision.reason})")
 
 
+async def test_model_artifacts_and_prompts():
+    """Test model artifact discovery, loaders, screen cache, and prompt wiring."""
+    from app.agent.llm_planner import LLMPlanner
+    from app.runtime.artifact_store import ArtifactStore
+    from app.runtime.model_loaders import browser_warmup_loader, vault_crypto_loader
+    from app.runtime.screen_cache import ScreenCache
+
+    print("\nTesting model artifacts and prompts...")
+    store = ArtifactStore()
+    inventory = store.inventory()
+    assert "ui-detector-int8" in inventory
+    assert "qwen-1.5b-q4" in inventory
+    print(f"[ok] Artifact inventory keys: {list(inventory)}")
+
+    vault = vault_crypto_loader(store)()
+    assert vault["status"] in {"loaded", "unavailable"}
+    print(f"[ok] Vault crypto loader: {vault['status']}")
+
+    browser = browser_warmup_loader(store)()
+    assert browser["status"] in {"loaded", "unavailable"}
+    print(f"[ok] Browser warmup loader: {browser['status']}")
+
+    prompt = LLMPlanner().build_prompt("search air coolers")
+    assert "Screen-AI" in prompt
+    assert "search air coolers" in prompt
+    print("[ok] LLM prompt templates are wired")
+
+    cache = ScreenCache()
+    key = cache.key_text("test command", context="test")
+    cache.write_json("ui", key, {"ok": True})
+    assert cache.read_json("ui", key) == {"ok": True}
+    print(f"[ok] Screen cache stats: {cache.stats()}")
+
+
 async def main():
     """Run all tests."""
     from app.db.database import close_db
@@ -192,6 +232,7 @@ async def main():
         await test_vault()
         await test_redactor()
         await test_runtime_pipeline()
+        await test_model_artifacts_and_prompts()
 
         print("\n" + "=" * 60)
         print("All tests passed! [ok]")

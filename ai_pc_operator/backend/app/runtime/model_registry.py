@@ -83,6 +83,32 @@ class ModelRegistry:
                 unloaded.append(name)
         return unloaded
 
+    def status(self) -> dict[str, Any]:
+        """Return safe model status without exposing heavyweight objects."""
+        loaded: dict[str, dict[str, Any]] = {}
+        for name, item in self.loaded.items():
+            value = item.value
+            if isinstance(value, dict):
+                safe_value = {
+                    key: val
+                    for key, val in value.items()
+                    if key != "model"
+                }
+            else:
+                safe_value = {"status": "loaded", "type": type(value).__name__}
+            loaded[name] = {
+                "estimated_mb": item.spec.estimated_mb,
+                "loaded_at": item.loaded_at,
+                "last_used": item.last_used,
+                "value": safe_value,
+            }
+
+        return {
+            "registered": list(self.specs),
+            "loaded": loaded,
+            "loading": list(self.loading),
+        }
+
     async def shutdown(self) -> None:
         for task in self.loading.values():
             task.cancel()
@@ -90,17 +116,3 @@ class ModelRegistry:
             await asyncio.gather(*self.loading.values(), return_exceptions=True)
         self.loading.clear()
         self.loaded.clear()
-
-
-def placeholder_loader(name: str) -> Loader:
-    """Create a cheap placeholder loader until real OCR/YOLO/LLM imports land."""
-
-    def load() -> dict[str, Any]:
-        return {
-            "name": name,
-            "status": "placeholder-loaded",
-            "loaded_at": time.time(),
-        }
-
-    return load
-

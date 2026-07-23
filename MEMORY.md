@@ -470,3 +470,76 @@ Next work:
 **Last Updated**: 2026-07-24 00:09:12 +05:30
 **Version**: 1.2.1
 **Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-24 00:19:07 +05:30
+
+Focus: replace model placeholders with real loader/discovery wiring and connect unused architecture pieces.
+
+Changed:
+
+- Added model artifact discovery:
+  - `app/runtime/artifact_store.py`
+  - searches `ai_pc_operator/data/models`, hackathon distill outputs, and `SCREEN_AI_MODEL_DIR`
+- Added optional real loaders:
+  - PaddleOCR for `ocr-mobile`
+  - ONNX Runtime for `ui-detector-int8`
+  - llama.cpp GGUF for `qwen-1.5b-q4`
+  - cryptography warmup for `vault-crypto`
+  - Playwright warmup for `browser-warmup`
+- Removed `placeholder_loader` from the runtime registry.
+- Added `app/agent/llm_planner.py`.
+- `LLMPlanner` now imports and uses `SYSTEM_PROMPT` and `USER_PROMPT_TEMPLATE`.
+- `AgentRouter` can attempt LLM planning only for unknown intents when RAM allows and a real Qwen GGUF model is loaded.
+- Added backend `ScreenCache`:
+
+```text
+ai_pc_operator/data/.screen_ai_cache/
+  ui_maps/
+  ocr_results/
+  detector_results/
+```
+
+- `AgentRouter` writes redacted plan metadata into the cache.
+- `/runtime` now reports:
+  - memory budget
+  - model registry status
+  - artifact inventory
+  - screen cache stats
+- `LogRedactor` is now used:
+  - as a global logging filter
+  - when saving commands
+  - when saving action input/output JSON
+  - when saving memory entries
+- Nested list/dict redaction now works.
+- Added artifact CLI:
+
+```powershell
+python .\ai_pc_operator\backend\scripts\model_artifacts.py inventory
+python .\ai_pc_operator\backend\scripts\model_artifacts.py stage-yolo <ui_detector_int8.onnx>
+python .\ai_pc_operator\backend\scripts\model_artifacts.py stage-gguf <qwen.gguf>
+```
+
+Verification:
+
+```text
+py_compile: pass
+backend test_basic.py: pass
+model_artifacts.py inventory: pass
+/runtime: pass
+/command search best air coolers in chrome: pass
+/command close browser: pass
+```
+
+Current artifact inventory:
+
+```text
+ocr-mobile: missing
+ui-detector-int8: missing
+qwen-1.5b-q4: missing
+vault-crypto: no artifact required
+browser-warmup: no artifact required
+```
+
+**Last Updated**: 2026-07-24 00:19:07 +05:30
+**Version**: 1.3.0
+**Maintainer**: Screen-AI Team

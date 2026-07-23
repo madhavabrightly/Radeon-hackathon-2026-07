@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Any
+from typing import Any
 
 
 class LogRedactor:
@@ -41,9 +41,13 @@ class LogRedactor:
 
         return redacted
 
-    def redact_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Redact sensitive information from dictionary."""
+    def redact_dict(self, data: Any) -> Any:
+        """Redact sensitive information from nested dictionaries/lists."""
         if not isinstance(data, dict):
+            if isinstance(data, list):
+                return [self.redact_dict(item) for item in data]
+            if isinstance(data, str):
+                return self.redact(data)
             return data
 
         redacted = {}
@@ -59,7 +63,7 @@ class LogRedactor:
                 redacted[key] = "[REDACTED]"
             elif isinstance(value, str):
                 redacted[key] = self.redact(value)
-            elif isinstance(value, dict):
+            elif isinstance(value, (dict, list)):
                 redacted[key] = self.redact_dict(value)
             else:
                 redacted[key] = value

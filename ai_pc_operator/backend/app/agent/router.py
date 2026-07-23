@@ -10,6 +10,7 @@ import asyncio
 import logging
 from typing import Optional, Dict, Any, List
 
+from app.agent.llm_planner import LLMPlanner
 from app.agent.planner import Planner
 from app.agent.memory import Memory
 from app.security.risk import RiskClassifier
@@ -20,10 +21,20 @@ from app.tools.file_tools import FileTools
 from app.tools.browser_tools import BrowserTools
 from app.tools.auth_tools import AuthTools
 from app.db.database import db_session
+from app.logs.redactor import LogRedactor
+from app.runtime.artifact_store import ArtifactStore
 from app.runtime.heatmap import ToolHeatMap
 from app.runtime.io_pool import IOPool
-from app.runtime.model_registry import ModelRegistry, ModelSpec, placeholder_loader
+from app.runtime.model_loaders import (
+    browser_warmup_loader,
+    ocr_mobile_loader,
+    qwen_gguf_loader,
+    ui_detector_loader,
+    vault_crypto_loader,
+)
+from app.runtime.model_registry import ModelRegistry, ModelSpec
 from app.runtime.resource_budget import ResourceBudget
+from app.runtime.screen_cache import ScreenCache
 from app.runtime.tier_manager import AgentTierManager
 
 logger = logging.getLogger(__name__)
@@ -42,12 +53,16 @@ class AgentRouter:
     ):
         """Initialize agent router."""
         self.planner = Planner()
+        self.llm_planner = LLMPlanner()
         self.memory = Memory()
+        self.redactor = LogRedactor()
         self.risk_classifier = RiskClassifier()
         self.permission_engine = PermissionEngine()
         self.approval_manager = approval_manager
         self.resource_budget = ResourceBudget()
         self.io_pool = IOPool(max_workers=2)
+        self.artifacts = ArtifactStore()
+        self.screen_cache = ScreenCache()
         self.model_registry = ModelRegistry(self.resource_budget, self.io_pool)
         self.heatmap = ToolHeatMap()
         self.tier_manager = AgentTierManager()
@@ -64,26 +79,26 @@ class AgentRouter:
         self.emergency_stopped = False
 
     def _register_lazy_models(self) -> None:
-        """Register lazy model placeholders for RAM-aware prefetch."""
+        """Register lazy model loaders for RAM-aware prefetch."""
         self.model_registry.register(
-            ModelSpec("ocr-mobile", 160, placeholder_loader("ocr-mobile"))
+            ModelSpec("ocr-mobile", 160, ocr_mobile_loader(self.artifacts))
         )
         self.model_registry.register(
-            ModelSpec("ui-detector-int8", 350, placeholder_loader("ui-detector-int8"))
+            ModelSpec("ui-detector-int8", 350, ui_detector_loader(self.artifacts))
         )
         self.model_registry.register(
             ModelSpec(
                 "qwen-1.5b-q4",
                 1200,
-                placeholder_loader("qwen-1.5b-q4"),
+                qwen_gguf_loader(self.artifacts),
                 idle_ttl_sec=300,
             )
         )
         self.model_registry.register(
-            ModelSpec("vault-crypto", 64, placeholder_loader("vault-crypto"))
+            ModelSpec("vault-crypto", 64, vault_crypto_loader(self.artifacts))
         )
         self.model_registry.register(
-            ModelSpec("browser-warmup", 128, placeholder_loader("browser-warmup"))
+            ModelSpec("browser-warmup", 128, browser_warmup_loader(self.artifacts))
         )
 
     async def process_command(
@@ -124,6 +139,14 @@ class AgentRouter:
             budget = await budget_task
             logger.info(f"Intent: {intent}")
 
+            llm_plan: Dict[str, Any] | None = None
+            if intent == "unknown" and budget.allow_llm:
+                qwen = await self.model_registry.get("qwen-1.5b-q4")
+                llm_plan = await self.llm_planner.create_plan(text, qwen)
+                if llm_plan:
+                    intent = llm_plan.get("intent", intent)
+                    logger.info("LLM planner produced a plan for unknown intent")
+
             # Step 3: assess risk while runtime tiers/prefetch are decided.
             risk_task = asyncio.create_task(
                 self.risk_classifier.assess(text, intent)
@@ -133,8 +156,11 @@ class AgentRouter:
             self.model_registry.prefetch(tier_decision.prefetch_models)
             self._prefetch_hot_tools(self.heatmap.hot_tools(intent), budget.model_budget_mb)
             risk_level = await risk_task
+            if llm_plan:
+                risk_level = max(risk_level, int(llm_plan.get("risk_level", 1)))
             logger.info(f"Risk level: {risk_level}")
             logger.info(f"Tier decision: {tier_decision}")
+            await self._update_command_metadata(command_id, intent, risk_level)
 
             # Step 4: Check permissions
             requires_approval = self.permission_engine.requires_approval(
@@ -148,8 +174,8 @@ class AgentRouter:
                     command_id=command_id,
                     risk_level=risk_level,
                     action_type=intent,
-                    target=text,
-                    description=f"Execute: {text}",
+                    target=self.redactor.redact(text),
+                    description=f"Execute: {self.redactor.redact(text)}",
                 )
 
                 # Wait for approval
@@ -168,10 +194,11 @@ class AgentRouter:
                     }
 
             # Step 6: Plan actions
-            plan = await self.planner.create_plan(text, intent)
+            plan = llm_plan or await self.planner.create_plan(text, intent)
             logger.info(f"Plan: {plan}")
             steps = plan.get("steps", [])
             self.heatmap.record_plan(intent, steps)
+            self._write_plan_cache(text, intent, plan, tier_decision.to_dict())
 
             if not steps:
                 message = (
@@ -190,7 +217,7 @@ class AgentRouter:
                     "unsupported",
                     response["result"],
                 )
-                await self.memory.add(text, intent, response)
+                await self.memory.add(self.redactor.redact(text), intent, response)
                 return response
 
             # Step 7: Execute tools
@@ -224,7 +251,7 @@ class AgentRouter:
             )
 
             # Save to memory
-            await self.memory.add(text, intent, response)
+            await self.memory.add(self.redactor.redact(text), intent, response)
             await self._maintenance()
 
             return response
@@ -309,11 +336,34 @@ class AgentRouter:
                 INSERT INTO commands (source, device_id, input_text, status)
                 VALUES (?, ?, ?, ?)
                 """,
-                ("mobile" if device_id else "pc", device_id, text, "pending"),
+                (
+                    "mobile" if device_id else "pc",
+                    device_id,
+                    self.redactor.redact(text),
+                    "pending",
+                ),
             )
             await db.commit()
             command_id = cursor.lastrowid
         return command_id
+
+    async def _update_command_metadata(
+        self,
+        command_id: int,
+        intent: str,
+        risk_level: int,
+    ) -> None:
+        """Persist classified intent and risk for history/audit views."""
+        async with db_session() as db:
+            await db.execute(
+                """
+                UPDATE commands
+                SET intent = ?, risk_level = ?
+                WHERE id = ?
+                """,
+                (intent, risk_level, command_id),
+            )
+            await db.commit()
 
     async def _update_command_status(
         self,
@@ -355,10 +405,10 @@ class AgentRouter:
                 (
                     command_id,
                     tool,
-                    json.dumps(input_data),
-                    json.dumps(output_data) if output_data else None,
+                    json.dumps(self.redactor.redact_dict(input_data)),
+                    json.dumps(self.redactor.redact_dict(output_data)) if output_data else None,
                     status,
-                    error,
+                    self.redactor.redact(error) if error else None,
                 ),
             )
             await db.commit()
@@ -424,3 +474,23 @@ class AgentRouter:
                 continue
             if asyncio.iscoroutinefunction(prepare):
                 asyncio.create_task(prepare())
+
+    def _write_plan_cache(
+        self,
+        text: str,
+        intent: str,
+        plan: Dict[str, Any],
+        runtime: Dict[str, Any],
+    ) -> None:
+        """Record plan metadata in the screen cache hierarchy."""
+        key = self.screen_cache.key_text(text, context=intent)
+        self.screen_cache.write_json(
+            "ui",
+            key,
+            {
+                "command": self.redactor.redact(text),
+                "intent": intent,
+                "plan": self.redactor.redact_dict(plan),
+                "runtime": runtime,
+            },
+        )

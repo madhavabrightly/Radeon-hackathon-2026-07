@@ -34,6 +34,22 @@ ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = ROOT / "ai_pc_operator" / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+
+class RedactingFilter(logging.Filter):
+    """Redact secrets before records reach file/console handlers."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.redactor = LogRedactor()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = self.redactor.redact(str(record.msg))
+        if record.args:
+            record.args = tuple(
+                self.redactor.redact(str(arg)) for arg in record.args
+            )
+        return True
+
 # Setup logging with redaction
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +59,8 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
+for handler in logging.getLogger().handlers:
+    handler.addFilter(RedactingFilter())
 logger = logging.getLogger("ai_pc_operator")
 
 # Global state
@@ -165,11 +183,9 @@ async def runtime_status():
             "allow_detector": budget.allow_detector,
             "allow_llm": budget.allow_llm,
         },
-        "models": {
-            "registered": list(agent_router.model_registry.specs),
-            "loaded": list(agent_router.model_registry.loaded),
-            "loading": list(agent_router.model_registry.loading),
-        },
+        "models": agent_router.model_registry.status(),
+        "artifacts": agent_router.artifacts.inventory(),
+        "screen_cache": agent_router.screen_cache.stats(),
     }
 
 

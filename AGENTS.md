@@ -1402,3 +1402,55 @@ Recommended next command when Playwright automation is needed:
 ```powershell
 python -m playwright install chromium
 ```
+
+## 2026-07-24 Real Model Loader Wiring
+
+The runtime model slots are no longer placeholders.
+
+Implemented:
+
+- Added `ArtifactStore` for model discovery in:
+  - `ai_pc_operator/data/models`
+  - `hackathon_ui_operator_distill/data`
+  - `hackathon_ui_operator_distill/runs`
+  - `SCREEN_AI_MODEL_DIR`
+- Added optional real loaders:
+  - `ocr-mobile`: PaddleOCR when installed
+  - `ui-detector-int8`: ONNX Runtime with exported INT8 detector
+  - `qwen-1.5b-q4`: llama.cpp GGUF loader
+  - `vault-crypto`: cryptography warmup
+  - `browser-warmup`: Playwright import warmup
+- Removed `placeholder_loader` from the model registry path.
+- Added `LLMPlanner`, which imports `SYSTEM_PROMPT` and `USER_PROMPT_TEMPLATE` from `prompts.py`.
+- `AgentRouter` now only asks the local LLM planner for unknown commands when RAM allows the Qwen tier and a real model is loaded.
+- Added backend `ScreenCache` at:
+
+```text
+ai_pc_operator/data/.screen_ai_cache/
+  ui_maps/
+  ocr_results/
+  detector_results/
+```
+
+- `AgentRouter` writes redacted plan/cache metadata under `ui_maps`.
+- `/runtime` reports memory budget, model status, artifact inventory, and cache stats.
+- `LogRedactor` now runs as a logging filter and redacts command/action persistence.
+- Nested plans/lists are redacted, not just top-level dictionaries.
+
+Artifact CLI:
+
+```powershell
+python .\ai_pc_operator\backend\scripts\model_artifacts.py inventory
+python .\ai_pc_operator\backend\scripts\model_artifacts.py stage-yolo .\path\to\ui_detector_int8.onnx
+python .\ai_pc_operator\backend\scripts\model_artifacts.py stage-gguf .\path\to\qwen.gguf
+```
+
+Current artifact status on this machine:
+
+```text
+ocr-mobile: not staged
+ui-detector-int8: not staged
+qwen-1.5b-q4: not staged
+vault-crypto: dependency loader available
+browser-warmup: dependency loader available
+```
