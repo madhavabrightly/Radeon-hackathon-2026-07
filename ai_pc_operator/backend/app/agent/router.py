@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any, List
 
 from app.agent.llm_planner import LLMPlanner
 from app.agent.planner import Planner
+from app.agent.task_planner import TaskPlanner
 from app.agent.memory import Memory
 from app.security.risk import RiskClassifier
 from app.security.permissions import PermissionEngine
@@ -56,6 +57,7 @@ class AgentRouter:
     ):
         """Initialize agent router."""
         self.planner = Planner()
+        self.task_planner = TaskPlanner()
         self.llm_planner = LLMPlanner()
         self.memory = Memory()
         self.redactor = LogRedactor()
@@ -140,7 +142,8 @@ class AgentRouter:
             budget_task = asyncio.create_task(
                 asyncio.to_thread(self.resource_budget.measure)
             )
-            intent = await self.planner.classify_intent(text)
+            task_plan = self.task_planner.plan(text)
+            intent = task_plan.intent if task_plan else await self.planner.classify_intent(text)
             budget = await budget_task
             ssd_plan = self.ssd_tier.plan(
                 budget,
@@ -210,7 +213,11 @@ class AgentRouter:
                     }
 
             # Step 6: Plan actions
-            plan = llm_plan or await self.planner.create_plan(text, intent)
+            plan = (
+                task_plan.to_dict()
+                if task_plan
+                else llm_plan or await self.planner.create_plan(text, intent)
+            )
             logger.info(f"Plan: {plan}")
             steps = plan.get("steps", [])
             self.heatmap.record_plan(intent, steps)

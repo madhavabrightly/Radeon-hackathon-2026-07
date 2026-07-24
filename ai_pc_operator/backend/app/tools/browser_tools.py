@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import html
 import re
 import time
 import webbrowser
+from datetime import datetime
+from pathlib import Path
 from urllib.parse import quote_plus, urlparse
 from typing import Dict, Any, Optional
 
@@ -186,12 +190,57 @@ class BrowserTools:
                 "error": str(e),
             }
 
+    async def research_collect(
+        self,
+        query: str,
+        max_sites: int = 5,
+        save_dir: Optional[str] = None,
+        max_chars_per_site: int = 12000,
+    ) -> Dict[str, Any]:
+        """Search the web, visit result pages, extract visible text, and save a report."""
+        max_sites = max(1, min(int(max_sites), 10))
+        try:
+            await self._ensure_browser()
+            links = await self._search_result_links(query, max_sites * 3)
+            if not links:
+                links = await asyncio.to_thread(self._search_result_links_http, query, max_sites * 3)
+            collected = []
+
+            for url in links[:max_sites]:
+                try:
+                    await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    title = await self.page.title()
+                    text = await self.page.text_content("body") or ""
+                    text = self._clean_text(text)[:max_chars_per_site]
+                    if len(text) < 200:
+                        continue
+                    collected.append({"url": url, "title": title, "text": text})
+                except Exception as exc:
+                    collected.append({"url": url, "title": "", "error": str(exc), "text": ""})
+
+            path = await asyncio.to_thread(self._save_research_report, query, collected, save_dir)
+            self.last_used = time.monotonic()
+            return {
+                "status": "success",
+                "query": query,
+                "visited": len(collected),
+                "saved_path": str(path),
+                "sources": [
+                    {"url": item["url"], "title": item.get("title", ""), "chars": len(item.get("text", ""))}
+                    for item in collected
+                ],
+            }
+        except Exception as e:
+            return {
+                "status": "failed",
+                "query": query,
+                "error": str(e),
+            }
+
     async def download(self, url: str, filename: Optional[str] = None) -> Dict[str, Any]:
         """Download a file."""
         try:
             import urllib.request
-            from pathlib import Path
-
             ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
             DOWNLOAD_DIR = ROOT / "ai_pc_operator" / "data" / "downloads"
             DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -243,6 +292,135 @@ class BrowserTools:
             ".reg",
         }
         return any(filename.lower().endswith(ext) for ext in dangerous_extensions)
+
+    async def _extract_search_links(self, limit: int, selector: str = "a[href]") -> list[str]:
+        """Extract likely organic result links from the search page."""
+        hrefs = await self.page.eval_on_selector_all(
+            selector,
+            """els => els.map(a => a.href).filter(Boolean)""",
+        )
+        blocked_hosts = {
+            "accounts.google.com",
+            "support.google.com",
+            "policies.google.com",
+            "maps.google.com",
+            "www.google.com",
+            "google.com",
+            "www.bing.com",
+            "bing.com",
+            "duckduckgo.com",
+            "www.duckduckgo.com",
+        }
+        links: list[str] = []
+        for href in hrefs:
+            parsed = urlparse(href)
+            if parsed.scheme not in {"http", "https"}:
+                continue
+            if parsed.netloc.lower() in blocked_hosts:
+                continue
+            if any(part in href.lower() for part in ["/search?", "google.com/preferences"]):
+                continue
+            if href not in links:
+                links.append(href)
+            if len(links) >= limit:
+                break
+        return links
+
+    def _search_result_links_http(self, query: str, limit: int) -> list[str]:
+        """HTTP fallback that decodes Bing redirect result URLs."""
+        import requests
+
+        response = requests.get(
+            f"https://www.bing.com/search?q={quote_plus(query)}",
+            headers={"User-Agent": "Mozilla/5.0 Screen-AI"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        raw_links = re.findall(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"', response.text)
+        links: list[str] = []
+        for raw in raw_links:
+            href = html.unescape(raw)
+            decoded = self._decode_bing_redirect(href)
+            if decoded and decoded not in links:
+                links.append(decoded)
+            if len(links) >= limit:
+                break
+        return links
+
+    def _decode_bing_redirect(self, href: str) -> str | None:
+        parsed = urlparse(href)
+        if parsed.netloc.lower() not in {"www.bing.com", "bing.com"}:
+            return href if parsed.scheme in {"http", "https"} else None
+        match = re.search(r"[?&]u=([^&]+)", href)
+        if not match:
+            return None
+        encoded = match.group(1)
+        if encoded.startswith("a1"):
+            encoded = encoded[2:]
+        try:
+            padded = encoded + "=" * (-len(encoded) % 4)
+            decoded = base64.urlsafe_b64decode(padded).decode("utf-8", errors="ignore")
+            parsed_decoded = urlparse(decoded)
+            if parsed_decoded.scheme in {"http", "https"}:
+                return decoded
+        except Exception:
+            return None
+        return None
+
+    async def _search_result_links(self, query: str, limit: int) -> list[str]:
+        """Try multiple search engines because result markup varies by region/session."""
+        engines = [
+            (f"https://www.google.com/search?q={quote_plus(query)}", "a:has(h3)"),
+            (f"https://www.bing.com/search?q={quote_plus(query)}", "li.b_algo h2 a"),
+            (f"https://duckduckgo.com/html/?q={quote_plus(query)}", "a.result__a"),
+        ]
+        links: list[str] = []
+        for url, selector in engines:
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            for href in await self._extract_search_links(limit, selector):
+                if href not in links:
+                    links.append(href)
+                if len(links) >= limit:
+                    return links
+        return links
+
+    def _save_research_report(
+        self,
+        query: str,
+        collected: list[dict[str, Any]],
+        save_dir: Optional[str],
+    ) -> Path:
+        root = Path(__file__).resolve().parent.parent.parent.parent.parent
+        base = Path(save_dir).expanduser() if save_dir else root / "ai_pc_operator" / "data" / "research"
+        base.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_query = re.sub(r"[^a-zA-Z0-9_-]+", "_", query).strip("_")[:60] or "research"
+        path = base / f"research_{safe_query}_{stamp}.txt"
+        lines = [
+            "Screen-AI Research Report",
+            f"Query: {query}",
+            f"Created: {datetime.now().isoformat(timespec='seconds')}",
+            "",
+        ]
+        for idx, item in enumerate(collected, start=1):
+            lines.extend(
+                [
+                    "=" * 80,
+                    f"Source {idx}: {item.get('title') or '(untitled)'}",
+                    f"URL: {item.get('url')}",
+                    "",
+                    item.get("error") or item.get("text") or "",
+                    "",
+                ]
+            )
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+
+    def _clean_text(self, text: str) -> str:
+        text = re.sub(r"\r\n?", "\n", text)
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
     async def close(self) -> Dict[str, Any]:
         """Close browser."""

@@ -10,8 +10,9 @@ Your responsibilities:
 
 Available tools:
 - file.list, file.scan, file.read, file.move, file.copy, file.quarantine, file.restore
-- system.status, system.disk_usage, system.ram_usage, system.processes, system.open_app
-- browser.open, browser.search, browser.click, browser.type, browser.read, browser.download
+- system.status, system.disk_usage, system.ram_usage, system.processes, system.open_app, system.open_settings, system.keep_awake
+- browser.open, browser.search, browser.click, browser.type, browser.read, browser.download, browser.research_collect
+- screen.scan, screen.click_text
 - auth.password_login, auth.passkey_login, auth.vault_unlock
 - approval.request
 
@@ -32,6 +33,13 @@ Always respond in JSON format with:
     {"tool": "tool.name", "args": {...}}
   ]
 }
+
+Planning rules:
+- For multi-step research commands, prefer browser.research_collect instead of many tiny browser steps.
+- For visible desktop controls, use screen.scan or screen.click_text.
+- For Windows settings pages, use system.open_settings.
+- For keeping the PC awake, use system.keep_awake with minutes <= 120.
+- Never invent tools that are not listed above.
 """
 
 USER_PROMPT_TEMPLATE = """User command: {command}

@@ -47,3 +47,15 @@ It chooses whether a hotter cold item should replace the weakest resident slot
 using a frequency + recency score with hysteresis. The Python runtime currently
 implements the live orchestration; this C policy is the native migration path for
 low-overhead tier decisions.
+
+## Endpoint Ranking
+
+`endpoint_rank.c` mirrors the runtime click-target scoring policy in tiny C:
+
+```text
+text match + UIA confidence + sane bounds + source priority -> endpoint score
+```
+
+The Python `screen.click_text` tool remains the live implementation, while this
+native module is ready for a DLL/shared-library path when the scanner loop needs
+lower latency.

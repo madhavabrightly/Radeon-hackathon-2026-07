@@ -128,9 +128,10 @@ class ScreenTools:
                 element.get("role", ""),
             ]
             haystack = " ".join(item for item in labels if item)
-            score = self._score(query, self._normalize(haystack))
+            text_score = self._score(query, self._normalize(haystack))
+            score = self._endpoint_score(element, text_score)
             if best is None or score > best["score"]:
-                best = {"score": score, "element": element}
+                best = {"score": score, "text_score": text_score, "element": element}
         return best
 
     def _score(self, query: str, label: str) -> float:
@@ -147,3 +148,12 @@ class ScreenTools:
 
     def _normalize(self, value: str) -> str:
         return " ".join(value.lower().strip().split())
+
+    def _endpoint_score(self, element: dict, text_score: float) -> float:
+        """Score endpoint like the native C policy."""
+        x1, y1, x2, y2 = element.get("bounds", [0, 0, 0, 0])
+        area = max(0, x2 - x1) * max(0, y2 - y1)
+        size_score = min(1.0, area / 50000.0) if area else 0.0
+        confidence = float(element.get("confidence") or 0.0)
+        source_bonus = 0.12 if element.get("source") == "uia" else 0.0
+        return min(1.0, text_score * 0.62 + confidence * 0.22 + size_score * 0.04 + source_bonus)

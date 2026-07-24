@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import psutil
+import asyncio
+import ctypes
 import platform
 import re
 import shlex
@@ -139,6 +141,43 @@ class SystemTools:
             "bytes_recv": net.bytes_recv,
             "packets_sent": net.packets_sent,
             "packets_recv": net.packets_recv,
+        }
+
+    async def open_settings(self, page: str = "ms-settings:") -> Dict[str, Any]:
+        """Open a Windows Settings page."""
+        try:
+            if not page.startswith("ms-settings:"):
+                page = "ms-settings:"
+            subprocess.Popen(["explorer.exe", page])
+            return {"status": "success", "page": page}
+        except Exception as e:
+            return {"status": "failed", "error": str(e)}
+
+    async def keep_awake(self, minutes: int = 60) -> Dict[str, Any]:
+        """Prevent system/display sleep for a bounded duration."""
+        minutes = max(1, min(int(minutes), 120))
+        if platform.system().lower() != "windows":
+            return {
+                "status": "failed",
+                "error": "keep_awake is currently implemented for Windows only",
+            }
+
+        async def hold_awake() -> None:
+            es_continuous = 0x80000000
+            es_system_required = 0x00000001
+            es_display_required = 0x00000002
+            flags = es_continuous | es_system_required | es_display_required
+            ctypes.windll.kernel32.SetThreadExecutionState(flags)
+            try:
+                await asyncio.sleep(minutes * 60)
+            finally:
+                ctypes.windll.kernel32.SetThreadExecutionState(es_continuous)
+
+        asyncio.create_task(hold_awake())
+        return {
+            "status": "success",
+            "minutes": minutes,
+            "method": "SetThreadExecutionState",
         }
 
     async def run_command(self, command: str) -> Dict[str, Any]:

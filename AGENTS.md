@@ -1582,3 +1582,38 @@ Rules:
 - OCR/detector are lazy and evictable.
 - `/runtime` is the source of truth for current model placement.
 - Native C LFRU policy exists under `hackathon_ui_operator_distill/native/ssd_tier_policy.c` for future low-overhead promotion decisions.
+
+## Compound Task Planner: 2026-07-24 19:03:38 +05:30
+
+The agent now has a high-level task planner before the older single-intent rule planner.
+
+Supported compound task families:
+
+- `research_collect`: search web, visit multiple pages, extract text, save report.
+- `open_settings`: open Windows settings pages such as contrast settings.
+- `keep_awake`: hold Windows awake through `SetThreadExecutionState`.
+
+Important implementation files:
+
+```text
+ai_pc_operator/backend/app/agent/task_planner.py
+ai_pc_operator/backend/app/tools/browser_tools.py
+ai_pc_operator/backend/app/tools/system_tools.py
+hackathon_ui_operator_distill/native/endpoint_rank.c
+```
+
+Research command example:
+
+```text
+open chrome and search about AMD ROCm and go to 10 random websites and copy all text and paste in text file and save it folder
+```
+
+Plan:
+
+```text
+browser.research_collect(query="AMD ROCm", max_sites=10)
+```
+
+Safety rule:
+
+- Keep local automation visible and user-approved. Do not implement stealth, bot-evasion, or hidden-control behavior.

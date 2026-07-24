@@ -102,6 +102,36 @@ async def test_planner():
     assert plan["steps"][0]["args"]["text"] == "Share"
 
 
+async def test_task_planner():
+    """Test high-level compound task planning."""
+    from app.agent.task_planner import TaskPlanner
+
+    print("\nTesting task planner...")
+    planner = TaskPlanner()
+    plan = planner.plan(
+        "open chrome and search about AMD ROCm and go to 10 random websites "
+        "and copy all text and paste in text file and save it folder"
+    )
+    assert plan
+    payload = plan.to_dict()
+    assert payload["intent"] == "research_collect"
+    assert payload["steps"][0]["tool"] == "browser.research_collect"
+    assert payload["steps"][0]["args"]["max_sites"] == 10
+    assert "AMD ROCm" in payload["steps"][0]["args"]["query"]
+    print("[ok] Research collect compound plan works")
+
+    plan = planner.plan("open settings and turn contrast to 30 percent")
+    assert plan
+    assert plan.to_dict()["steps"][0]["tool"] == "system.open_settings"
+    print("[ok] Settings compound plan works")
+
+    plan = planner.plan("keep the screen awake for 2 hours")
+    assert plan
+    assert plan.to_dict()["steps"][0]["tool"] == "system.keep_awake"
+    assert plan.to_dict()["steps"][0]["args"]["minutes"] == 120
+    print("[ok] Keep-awake plan works")
+
+
 async def test_permissions():
     """Test permission engine."""
     from app.security.permissions import PermissionEngine
@@ -282,6 +312,7 @@ async def main():
         await test_database()
         await test_risk_classifier()
         await test_planner()
+        await test_task_planner()
         await test_permissions()
         await test_vault()
         await test_redactor()

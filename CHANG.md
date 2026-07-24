@@ -1,5 +1,79 @@
 # Screen-AI Run Change Log
 
+## 2026-07-24 19:03:38 +05:30
+
+Purpose: make the agent less one-shot and more capable for compound desktop tasks.
+
+### Agent Intelligence
+
+- Added `app/agent/task_planner.py`.
+- `AgentRouter` now tries high-level task planning before single-intent rules.
+- New compound intents:
+  - `research_collect`
+  - `open_settings`
+  - `keep_awake`
+- Example now plans as one real task:
+
+```text
+open chrome and search about AMD ROCm and go to 10 random websites and copy all text and paste in text file and save it folder
+```
+
+into:
+
+```text
+browser.research_collect(query="AMD ROCm", max_sites=10)
+```
+
+### Browser Research Tool
+
+- Added `browser.research_collect`.
+- It searches, visits up to 10 result pages, extracts visible body text, and saves a `.txt` report under:
+
+```text
+ai_pc_operator/data/research/
+```
+
+- Added search fallback:
+  - browser search result selectors
+  - HTTP Bing fallback
+  - Bing redirect URL decoding
+
+### System Utilities
+
+- Added `system.open_settings` for Windows settings pages.
+- Added `system.keep_awake` using Windows `SetThreadExecutionState` with a 120-minute cap.
+
+### Native Endpoint Intelligence
+
+- Added C endpoint ranking scaffold:
+  - `hackathon_ui_operator_distill/native/endpoint_rank.c`
+  - `hackathon_ui_operator_distill/native/endpoint_rank.h`
+- `screen.click_text` now uses endpoint scoring that mirrors the native policy:
+
+```text
+text match + confidence + bounds sanity + UIA source priority
+```
+
+### LLM Prompt
+
+- Updated local planner prompt with the richer tool surface:
+  - `browser.research_collect`
+  - `screen.scan`
+  - `screen.click_text`
+  - `system.open_settings`
+  - `system.keep_awake`
+
+### Verification
+
+```text
+py_compile: pass
+endpoint_rank.c compile: pass
+test_basic.py: pass
+browser.research_collect("AMD ROCm", max_sites=1): pass
+visited: https://www.amd.com/en/products/software/rocm.html
+saved report: ai_pc_operator/data/research/research_AMD_ROCm_*.txt
+```
+
 ## 2026-07-24 02:33:30 +05:30
 
 Purpose: adapt the `codiii`/colibri SSD-tiering strategy for a 4 GB no-GPU Screen-AI runtime.

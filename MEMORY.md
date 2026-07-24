@@ -693,3 +693,33 @@ Added:
 **Last Updated**: 2026-07-24 02:33:30 +05:30
 **Version**: 1.3.4
 **Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-24 19:03:38 +05:30
+
+Focus: improve the command brain so compound user commands become real task plans.
+
+Added:
+
+- `TaskPlanner` for high-level task decomposition before single-intent planning.
+- `browser.research_collect` for search -> visit multiple pages -> extract text -> save report.
+- HTTP Bing fallback and redirect decoding when browser search result DOM is empty.
+- `system.open_settings`.
+- `system.keep_awake` using Windows `SetThreadExecutionState`.
+- Native C endpoint ranking scaffold.
+- Screen click scoring now accounts for text score, confidence, bounds, and UIA source priority.
+
+Validated:
+
+- Compound research command plans to `browser.research_collect`.
+- `browser.research_collect("AMD ROCm", max_sites=1)` visited AMD ROCm page and saved a report.
+- `endpoint_rank.c` compiled.
+- Backend smoke tests passed.
+
+Remaining intelligence gap:
+
+- We still need a full execution loop with step repair/retry and observation-based replanning.
+- We still need mobile UI for complex task progress/cancel.
+
+**Last Updated**: 2026-07-24 19:03:38 +05:30
+**Version**: 1.3.5
+**Maintainer**: Screen-AI Team
