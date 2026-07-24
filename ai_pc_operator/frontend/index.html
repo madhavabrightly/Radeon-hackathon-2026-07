@@ -73,7 +73,13 @@
         <!-- Main Screen -->
         <div id="main-screen" class="screen">
             <div class="header">
-                <h1>Screen-AI</h1>
+                <div class="brand-block">
+                    <h1>Screen-AI</h1>
+                    <div id="connection-badge" class="connection-badge" data-state="offline" aria-live="polite">
+                        <span class="connection-dot"></span>
+                        <span id="connection-label">Offline</span>
+                    </div>
+                </div>
                 <button id="emergency-stop" class="emergency-btn">🛑 STOP</button>
             </div>
 
@@ -93,6 +99,7 @@
                     ></textarea>
                     <button id="send-command">Send</button>
                 </div>
+                <div id="command-progress" class="progress-list hidden" aria-live="polite"></div>
                 <div id="command-response" class="response"></div>
             </div>
 

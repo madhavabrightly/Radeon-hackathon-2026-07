@@ -10,6 +10,7 @@ let state = {
     devicePublicKey: localStorage.getItem('device_public_key'),
     trustUntil: localStorage.getItem('trust_until'),
     ws: null,
+    wsReconnectTimer: null,
     cameraStream: null,
     qrScanInterval: null,
 };
@@ -35,6 +36,7 @@ async function init() {
         scheduleTokenRotation();
     } else {
         showLoginScreen();
+        setConnectionState('offline', 'Offline');
     }
 
     // Event listeners
@@ -232,14 +234,8 @@ async function handleQRData(qrData) {
         // Save credentials (sessionStorage - clears on tab close)
         saveSession(data.device_id, sessionToken, devicePublicKey, data.trust_until);
 
-        setStatus('qr-status', 'Paired successfully!', 'success');
-
-        setTimeout(() => {
-            showMainScreen();
-            connectWebSocket();
-            loadHistory();
-            loadApprovals();
-        }, 1000);
+        setStatus('qr-status', 'Paired successfully. Opening command console...', 'pair-success');
+        openRemoteConsoleAfterPair();
 
     } catch (error) {
         setStatus('qr-status', `Error: ${error.message}`, 'error');
@@ -286,10 +282,9 @@ async function pairWithCode() {
             localStorage.setItem('trust_until', new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString());
         }
 
-        showMainScreen();
-        connectWebSocket();
-        loadHistory();
-        loadApprovals();
+        document.getElementById('pair-error').textContent = '';
+        setStatus('pair-error', 'Paired successfully. Opening command console...', 'pair-success');
+        openRemoteConsoleAfterPair(500);
 
     } catch (error) {
         document.getElementById('pair-error').textContent = 'Network error: ' + error.message;
@@ -338,14 +333,8 @@ async function checkTrustedDevice() {
             data.trust_until || localStorage.getItem('trust_until')
         );
 
-        setStatus('trusted-status', 'Re-paired successfully!', 'success');
-
-        setTimeout(() => {
-            showMainScreen();
-            connectWebSocket();
-            loadHistory();
-            loadApprovals();
-        }, 1000);
+        setStatus('trusted-status', 'Re-paired successfully. Opening command console...', 'pair-success');
+        openRemoteConsoleAfterPair();
 
     } catch (error) {
         setStatus('trusted-status', `Error: ${error.message}`, 'error');
@@ -416,6 +405,14 @@ function setStatus(elementId, message, type) {
         el.textContent = message;
         el.className = `status ${type}`;
     }
+}
+
+function setConnectionState(status, label) {
+    const badge = document.getElementById('connection-badge');
+    const text = document.getElementById('connection-label');
+    if (!badge || !text) return;
+    badge.dataset.state = status;
+    text.textContent = label;
 }
 
 function authHeaders(extra = {}) {
@@ -532,18 +529,36 @@ async function checkTrustStatus() {
 // ============================================================
 
 function showLoginScreen() {
-    document.getElementById('login-screen').classList.add('active');
-    document.getElementById('main-screen').classList.remove('active');
+    const login = document.getElementById('login-screen');
+    const main = document.getElementById('main-screen');
+    login.classList.add('active', 'entering');
+    main.classList.remove('active', 'entering', 'leaving');
+    setConnectionState('offline', 'Offline');
+    setTimeout(() => login.classList.remove('entering'), 320);
 }
 
 function showMainScreen() {
-    document.getElementById('login-screen').classList.remove('active');
-    document.getElementById('main-screen').classList.add('active');
+    const login = document.getElementById('login-screen');
+    const main = document.getElementById('main-screen');
+    login.classList.remove('active', 'entering');
+    main.classList.add('active', 'entering');
+    setTimeout(() => main.classList.remove('entering'), 320);
 
     document.getElementById('device-name-display').textContent = getDeviceName();
     document.getElementById('device-id-display').textContent =
         state.deviceId ? state.deviceId.substring(0, 8) + '...' : '-';
     checkTrustStatus();
+}
+
+function openRemoteConsoleAfterPair(delayMs = 900) {
+    setTimeout(() => {
+        showMainScreen();
+        setConnectionState('connecting', 'Connecting');
+        connectWebSocket();
+        loadHistory();
+        loadApprovals();
+        scheduleTokenRotation();
+    }, delayMs);
 }
 
 function switchTab(tabName) {
@@ -567,7 +582,12 @@ async function sendCommand() {
     if (!text) return;
 
     const responseDiv = document.getElementById('command-response');
-    responseDiv.textContent = 'Processing...';
+    responseDiv.textContent = 'Working...';
+    renderProgress([
+        { label: 'Command received from phone', status: 'success' },
+        { label: 'Planning, risk check, and model budget selection', status: 'running' },
+        { label: 'Waiting for tool execution result', status: 'pending' },
+    ]);
 
     try {
         const response = await fetch(`${API_BASE}/command`, {
@@ -585,17 +605,57 @@ async function sendCommand() {
         const data = await response.json();
 
         if (data.requires_approval) {
+            renderProgress([
+                { label: 'Command received from phone', status: 'success' },
+                { label: 'Risk check requires mobile approval', status: 'running' },
+                { label: `Approval request ${data.approval_id}`, status: 'pending' },
+            ]);
             responseDiv.textContent = `Waiting for approval...\nApproval ID: ${data.approval_id}`;
             loadApprovals();
         } else {
+            const doneStatus = response.ok && data.status !== 'failed' ? 'success' : 'failed';
+            renderProgress([
+                { label: 'Command received from phone', status: 'success' },
+                { label: summarizeRuntime(data), status: 'success' },
+                { label: 'Tool execution finished', status: doneStatus },
+            ]);
             responseDiv.textContent = JSON.stringify(data, null, 2);
         }
 
         document.getElementById('command-text').value = '';
 
     } catch (error) {
+        renderProgress([
+            { label: 'Command received from phone', status: 'success' },
+            { label: 'Network or server error', status: 'failed' },
+        ]);
         responseDiv.textContent = 'Error: ' + error.message;
     }
+}
+
+function summarizeRuntime(data) {
+    const runtime = data?.runtime;
+    if (!runtime) return 'Planning and safety checks finished';
+    const tier = runtime.tier || 'selected tier';
+    const reason = runtime.reason || 'runtime selected';
+    return `${tier}: ${reason}`;
+}
+
+function renderProgress(steps) {
+    const box = document.getElementById('command-progress');
+    if (!box) return;
+    clearNode(box);
+    if (!steps || steps.length === 0) {
+        box.classList.add('hidden');
+        return;
+    }
+    steps.forEach(step => {
+        const row = document.createElement('div');
+        row.className = `progress-step ${step.status || 'pending'}`;
+        row.textContent = step.label || '';
+        box.appendChild(row);
+    });
+    box.classList.remove('hidden');
 }
 
 // ============================================================
@@ -765,6 +825,17 @@ function unpairDevice() {
     state.devicePublicKey = null;
     state.trustUntil = null;
 
+    if (state.ws) {
+        state.ws.onclose = null;
+        state.ws.close();
+        state.ws = null;
+    }
+    if (state.wsReconnectTimer) {
+        clearTimeout(state.wsReconnectTimer);
+        state.wsReconnectTimer = null;
+    }
+    renderProgress([]);
+
     showLoginScreen();
 }
 
@@ -773,7 +844,20 @@ function unpairDevice() {
 // ============================================================
 
 function connectWebSocket() {
+    if (!state.deviceId || !state.token) {
+        setConnectionState('offline', 'Offline');
+        return;
+    }
+    if (state.wsReconnectTimer) {
+        clearTimeout(state.wsReconnectTimer);
+        state.wsReconnectTimer = null;
+    }
+    if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
+
     try {
+        setConnectionState('connecting', 'Connecting');
         const params = new URLSearchParams({
             device_id: state.deviceId || '',
             token: state.token || '',
@@ -782,6 +866,7 @@ function connectWebSocket() {
 
         state.ws.onopen = () => {
             console.log('WebSocket connected');
+            setConnectionState('online', 'Connected');
         };
 
         state.ws.onmessage = (event) => {
@@ -789,20 +874,34 @@ function connectWebSocket() {
             console.log('WS message:', data);
 
             if (data.type === 'command_result') {
+                renderProgress([
+                    { label: 'Realtime command event received', status: 'success' },
+                    { label: 'History and approvals refreshed', status: 'success' },
+                ]);
                 loadHistory();
                 loadApprovals();
+            } else if (data.type === 'progress') {
+                renderProgress(data.steps || [{ label: data.message || 'Agent progress update', status: data.status || 'running' }]);
             }
         };
 
         state.ws.onclose = () => {
             console.log('WebSocket disconnected');
-            setTimeout(connectWebSocket, 5000);
+            state.ws = null;
+            if (!state.deviceId || !state.token) {
+                setConnectionState('offline', 'Offline');
+                return;
+            }
+            setConnectionState('connecting', 'Reconnecting');
+            state.wsReconnectTimer = setTimeout(connectWebSocket, 5000);
         };
 
         state.ws.onerror = (error) => {
             console.error('WebSocket error:', error);
+            setConnectionState('offline', 'Socket error');
         };
     } catch (error) {
         console.error('Failed to connect WebSocket:', error);
+        setConnectionState('offline', 'Offline');
     }
 }

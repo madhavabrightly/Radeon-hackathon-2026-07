@@ -2,11 +2,22 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="0; url=index.html">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Screen-AI Remote</title>
+    <link rel="stylesheet" href="styles.css">
+    <script>
+        window.location.replace('index.html');
+    </script>
 </head>
 <body>
-    <p><a href="index.html">Open Screen-AI Remote</a></p>
+    <div id="app">
+        <div class="screen active redirect-screen">
+            <div class="container">
+                <h1>Screen-AI</h1>
+                <p class="subtitle">Opening secure remote...</p>
+                <a class="redirect-link" href="index.html">Open Screen-AI Remote</a>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

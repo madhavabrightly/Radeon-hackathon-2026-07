@@ -31,6 +31,36 @@ body {
     display: block;
 }
 
+.screen.entering {
+    animation: screenEnter 280ms ease-out;
+}
+
+.screen.leaving {
+    animation: screenLeave 180ms ease-in;
+}
+
+@keyframes screenEnter {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes screenLeave {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+}
+
 /* Pairing Screen */
 #login-screen {
     display: flex;
@@ -199,6 +229,29 @@ h1 {
     color: #667eea;
 }
 
+.status.pair-success {
+    position: relative;
+    overflow: hidden;
+    background: rgba(0, 170, 68, 0.22);
+    color: #4ade80;
+    border: 1px solid rgba(74, 222, 128, 0.35);
+}
+
+.status.pair-success::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent);
+    transform: translateX(-100%);
+    animation: successSweep 900ms ease-out;
+}
+
+@keyframes successSweep {
+    to {
+        transform: translateX(100%);
+    }
+}
+
 .empty-message {
     color: #888;
     text-align: center;
@@ -292,10 +345,81 @@ input[type="text"]:focus {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
+    gap: 12px;
 }
 
 .header h1 {
     font-size: 1.8em;
+}
+
+.brand-block {
+    min-width: 0;
+}
+
+.connection-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 24px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #aaa;
+    font-size: 0.78em;
+    font-weight: 650;
+}
+
+.connection-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #777;
+    box-shadow: 0 0 0 0 rgba(119, 119, 119, 0.3);
+}
+
+.connection-badge[data-state="online"] {
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.35);
+    background: rgba(0, 170, 68, 0.12);
+}
+
+.connection-badge[data-state="online"] .connection-dot {
+    background: #4ade80;
+    box-shadow: 0 0 0 5px rgba(74, 222, 128, 0.12);
+}
+
+.connection-badge[data-state="connecting"] {
+    color: #facc15;
+    border-color: rgba(250, 204, 21, 0.35);
+    background: rgba(250, 204, 21, 0.1);
+}
+
+.connection-badge[data-state="connecting"] .connection-dot {
+    background: #facc15;
+    animation: pulseDot 1s infinite;
+}
+
+.connection-badge[data-state="offline"] {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.3);
+    background: rgba(248, 113, 113, 0.08);
+}
+
+.connection-badge[data-state="offline"] .connection-dot {
+    background: #f87171;
+}
+
+@keyframes pulseDot {
+    0% {
+        box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.45);
+    }
+    70% {
+        box-shadow: 0 0 0 8px rgba(250, 204, 21, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
+    }
 }
 
 .emergency-btn {
@@ -373,6 +497,74 @@ input[type="text"]:focus {
     white-space: pre-wrap;
     font-family: monospace;
     font-size: 0.9em;
+}
+
+.progress-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.progress-step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 38px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    background: #161616;
+    border: 1px solid #2c2c2c;
+    color: #aaa;
+    font-size: 0.9em;
+}
+
+.progress-step::before {
+    content: "";
+    width: 10px;
+    height: 10px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: #777;
+}
+
+.progress-step.running {
+    color: #facc15;
+    border-color: rgba(250, 204, 21, 0.32);
+}
+
+.progress-step.running::before {
+    background: #facc15;
+    animation: pulseDot 1s infinite;
+}
+
+.progress-step.success {
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.3);
+}
+
+.progress-step.success::before {
+    background: #4ade80;
+}
+
+.progress-step.failed {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.3);
+}
+
+.progress-step.failed::before {
+    background: #f87171;
+}
+
+.redirect-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.redirect-link {
+    color: #9db0ff;
+    font-weight: 700;
 }
 
 /* Approvals Tab */
@@ -495,5 +687,9 @@ input[type="text"]:focus {
 
     .screen {
         padding: 15px;
+    }
+
+    .header {
+        align-items: flex-start;
     }
 }

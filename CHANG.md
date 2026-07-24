@@ -679,3 +679,28 @@ GET /remote/index.html : pass
 GET /pair/qr : pass
 GET / : pass
 ```
+
+## 2026-07-24 19:24:26 +05:30
+
+Purpose: improve mobile pairing/connected UX and add a Windows stop script.
+
+### Changes
+
+- Added mobile header connection badge with WebSocket-driven states.
+- Added pairing success transition before opening the command console.
+- Added command progress timeline for command received, planning/risk/model budget, approval, execution, and error states.
+- Hardened WebSocket reconnect behavior so unpairing cancels reconnect timers.
+- Cleaned `login.html` into a styled redirect fallback to `index.html`.
+- Added `ai_pc_operator/stop.bat` to kill local servers listening on `8000` and `8443`.
+- Used `cmdc -p ... --max-turns 8` for terminal AI recommendations and implemented the safe local-automation UX pieces.
+
+### Verification
+
+```text
+node --check ai_pc_operator/frontend/app.js : pass
+```
+
+### Notes
+
+- Did not implement stealth, bot-evasion, hidden control, or anti-detection behavior.
+- Stop script was not executed because the local Screen-AI server was still being used.

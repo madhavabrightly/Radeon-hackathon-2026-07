@@ -723,3 +723,31 @@ Remaining intelligence gap:
 **Last Updated**: 2026-07-24 19:03:38 +05:30
 **Version**: 1.3.5
 **Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-24 19:24:26 +05:30
+
+Focus: make the paired mobile remote feel alive, connected, and recoverable.
+
+Added:
+
+- Visible connection badge on the mobile command header.
+- WebSocket state wiring for connected, reconnecting, offline, and socket-error states.
+- Pairing success transition before entering the command console.
+- Command progress timeline for receive, plan/risk/model-budget, approval, execution, and failure states.
+- `ai_pc_operator/stop.bat` for stopping local HTTP/HTTPS servers on ports `8000` and `8443`.
+- Cleaner `login.html` redirect fallback that uses the app stylesheet and points to `index.html`.
+
+Validated:
+
+- `node --check ai_pc_operator/frontend/app.js`: pass.
+- `cmdc` was queried with `cmdc -p ... --max-turns 8` and its useful non-stealth recommendations were implemented.
+
+Remaining:
+
+- Add backend-originated streamed progress events for long browser/research jobs.
+- Add a richer cancel/resume UI for multi-step tasks.
+- Keep all automation visible, approved, and auditable.
+
+**Last Updated**: 2026-07-24 19:24:26 +05:30
+**Version**: 1.3.6
+**Maintainer**: Screen-AI Team

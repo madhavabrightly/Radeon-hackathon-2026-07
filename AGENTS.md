@@ -1617,3 +1617,25 @@ browser.research_collect(query="AMD ROCm", max_sites=10)
 Safety rule:
 
 - Keep local automation visible and user-approved. Do not implement stealth, bot-evasion, or hidden-control behavior.
+
+## Mobile Remote UX And Command Code Notes: 2026-07-24 19:24:26 +05:30
+
+The mobile remote should make control state obvious to the user:
+
+- Header connection badge shows `Connected`, `Connecting`, `Reconnecting`, or `Offline`.
+- Pairing success uses a short visual transition before opening the command console.
+- Command tab shows a progress timeline before and after `/command` returns.
+- Emergency stop remains visible in the main header.
+- `ai_pc_operator/stop.bat` stops local Screen-AI servers on ports `8000` and `8443`.
+
+Command Code terminal AI can be queried non-interactively when extra planning/research is useful:
+
+```powershell
+cmdc -p "Give concise recommendations for Screen-AI mobile UX and local server scripts. No stealth/evasion suggestions." --max-turns 8
+```
+
+Implementation boundary:
+
+- Strong local PC automation is allowed for the owner's visible session.
+- Do not add stealth, bot-detection bypass, hidden remote control, or anti-forensics.
+- Prefer visible status, approvals, logs with redaction, and emergency stop.
