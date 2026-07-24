@@ -17,6 +17,7 @@ const STATIC_ASSETS = [
   '/remote/app.js',
   '/remote/manifest.json',
   '/remote/login.html',
+  '/remote/links.html',
   '/remote/pair.html',
   '/remote/sw.js',
   '/remote/worker.js',
