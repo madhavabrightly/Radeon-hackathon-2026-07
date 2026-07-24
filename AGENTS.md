@@ -1639,3 +1639,20 @@ Implementation boundary:
 - Strong local PC automation is allowed for the owner's visible session.
 - Do not add stealth, bot-detection bypass, hidden remote control, or anti-forensics.
 - Prefer visible status, approvals, logs with redaction, and emergency stop.
+
+## Plan Preview, JS Memory, And Relation Map: 2026-07-24 21:28:08 +05:30
+
+Phone text instructions now have a preview path before execution:
+
+- `POST /command/preview` calls `AgentRouter.preview_plan()`.
+- The preview returns interpreted intent, risk level, approval need, runtime tier, SSD tier, and redacted tool steps.
+- The mobile app debounces command typing and asks the backend for a plan preview.
+- Recent instructions are stored in browser `localStorage` as lightweight JS memory.
+- Draft command text is stored in `localStorage` and can be restored.
+- Offline commands are saved as drafts only; they are not replayed automatically.
+
+Relation-map notes:
+
+- `relation-map.md` and `ai_pc_operator/relation-map.md` are intentionally identical.
+- The router method in the map is `process_command()`, with `preview_plan()` for dry planning.
+- Keep the map updated whenever adding endpoint, runtime, database, native, or frontend-worker behavior.

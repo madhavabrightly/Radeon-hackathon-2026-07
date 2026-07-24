@@ -20,6 +20,132 @@ let state = {
 const browserCrypto = window.crypto || window.msCrypto;
 
 // ============================================================
+// PWA + Service Worker + Web Worker + IndexedDB
+// ============================================================
+
+let swRegistration = null;
+let appWorker = null;
+let previewTimer = null;
+const COMMAND_MEMORY_KEY = 'screenai_command_memory_v1';
+const COMMAND_DRAFT_KEY = 'screenai_command_draft_v1';
+
+// Register Service Worker for PWA / offline
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/remote/sw.js', { scope: '/remote/' })
+        .then((reg) => {
+            swRegistration = reg;
+            console.log('[ScreenAI] Service Worker registered, scope:', reg.scope);
+        })
+        .catch((err) => console.warn('[ScreenAI] SW registration failed:', err));
+
+    // Listen for service-worker cache status. Commands are never auto-executed
+    // from offline state; they remain drafts until the user presses Send again.
+    navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data?.type === 'COMMAND_DRAFT_SAVED') {
+            console.log('[ScreenAI] Offline command draft saved:', event.data.id);
+        }
+    });
+}
+
+// Initialize Web Worker for off-main-thread operations
+if (typeof Worker !== 'undefined') {
+    try {
+        appWorker = new Worker('/remote/worker.js');
+        appWorker.onmessage = (e) => {
+            const { type, id, result, error } = e.data;
+            if (error) {
+                console.warn(`[Worker] ${type} failed:`, error);
+            }
+            // Dispatch results to waiting handlers
+            const handler = _workerHandlers.get(id);
+            if (handler) {
+                _workerHandlers.delete(id);
+                handler(result, error);
+            }
+        };
+        console.log('[ScreenAI] Web Worker initialized');
+    } catch (err) {
+        console.warn('[ScreenAI] Worker init failed:', err);
+    }
+}
+
+const _workerHandlers = new Map();
+let _workerIdCounter = 0;
+
+function postToWorker(type, payload, timeout = 5000) {
+    return new Promise((resolve, reject) => {
+        if (!appWorker) { resolve(null); return; }
+        const id = ++_workerIdCounter;
+        const timer = setTimeout(() => {
+            _workerHandlers.delete(id);
+            resolve(null); // Graceful timeout — don't block UI
+        }, timeout);
+        _workerHandlers.set(id, (result, error) => {
+            clearTimeout(timer);
+            error ? resolve(null) : resolve(result);
+        });
+        appWorker.postMessage({ type, id, payload });
+    });
+}
+
+// IndexedDB caching for offline command drafts and history
+const IDB_NAME = 'screenai-cache';
+const IDB_VERSION = 1;
+
+function openIDB() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+        req.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+            if (!db.objectStoreNames.contains('offline_command_drafts')) {
+                db.createObjectStore('offline_command_drafts', { keyPath: 'id', autoIncrement: true });
+            }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+
+async function cacheForOffline(key, value) {
+    try {
+        const db = await openIDB();
+        const tx = db.transaction('kv', 'readwrite');
+        tx.objectStore('kv').put(value, key);
+    } catch (err) {
+        console.warn('[ScreenAI] IDB cache failed:', err);
+    }
+}
+
+async function readFromCache(key) {
+    try {
+        const db = await openIDB();
+        const tx = db.transaction('kv', 'readonly');
+        const req = tx.objectStore('kv').get(key);
+        return new Promise((resolve) => {
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => resolve(null);
+        });
+    } catch {
+        return null;
+    }
+}
+
+async function saveOfflineCommandDraft(text) {
+    try {
+        const db = await openIDB();
+        const tx = db.transaction('offline_command_drafts', 'readwrite');
+        tx.objectStore('offline_command_drafts').add({
+            text,
+            device_id: state.deviceId,
+            queued_at: Date.now(),
+        });
+    } catch (err) {
+        console.warn('[ScreenAI] Failed to save offline command draft:', err);
+    }
+}
+
+// ============================================================
 // Initialization
 // ============================================================
 
@@ -61,6 +187,8 @@ function setupEventListeners() {
 
     // Main screen
     document.getElementById('send-command')?.addEventListener('click', sendCommand);
+    document.getElementById('preview-command')?.addEventListener('click', previewCurrentCommand);
+    document.getElementById('restore-draft')?.addEventListener('click', restoreCommandDraft);
     document.getElementById('emergency-stop')?.addEventListener('click', emergencyStop);
     document.getElementById('unpair-button')?.addEventListener('click', unpairDevice);
     document.getElementById('rotate-token-btn')?.addEventListener('click', rotateTokenNow);
@@ -76,6 +204,23 @@ function setupEventListeners() {
         codeInput.addEventListener('input', (e) => {
             e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
         });
+    }
+
+    const commandText = document.getElementById('command-text');
+    if (commandText) {
+        commandText.value = localStorage.getItem(COMMAND_DRAFT_KEY) || '';
+        commandText.addEventListener('input', () => {
+            const value = commandText.value;
+            localStorage.setItem(COMMAND_DRAFT_KEY, value);
+            renderCommandMemory(value);
+            clearTimeout(previewTimer);
+            if (value.trim().length >= 8) {
+                previewTimer = setTimeout(previewCurrentCommand, 650);
+            } else {
+                renderPlanPreview(null);
+            }
+        });
+        renderCommandMemory(commandText.value);
     }
 }
 
@@ -450,6 +595,75 @@ function parseJsonSafe(value) {
     }
 }
 
+function loadCommandMemory() {
+    try {
+        return JSON.parse(localStorage.getItem(COMMAND_MEMORY_KEY) || '[]');
+    } catch {
+        return [];
+    }
+}
+
+function saveCommandToMemory(text) {
+    const normalized = " ".concat(text || "").trim();
+    if (!normalized) return;
+    const memory = loadCommandMemory().filter(item => item.text !== normalized);
+    memory.unshift({ text: normalized, used_at: Date.now() });
+    localStorage.setItem(COMMAND_MEMORY_KEY, JSON.stringify(memory.slice(0, 12)));
+    renderCommandMemory('');
+}
+
+function renderCommandMemory(filterText = '') {
+    const box = document.getElementById('command-memory');
+    if (!box) return;
+    const lower = (filterText || '').toLowerCase().trim();
+    const memory = loadCommandMemory()
+        .filter(item => !lower || item.text.toLowerCase().includes(lower) || fuzzyMemoryScore(lower, item.text) > 0.32)
+        .slice(0, 6);
+    clearNode(box);
+    if (memory.length === 0) {
+        box.classList.add('hidden');
+        return;
+    }
+    appendText(box, 'div', 'Recent instruction memory', 'memory-title');
+    const list = document.createElement('div');
+    list.className = 'memory-list';
+    memory.forEach(item => {
+        const btn = document.createElement('button');
+        btn.className = 'memory-item';
+        btn.type = 'button';
+        btn.textContent = item.text;
+        btn.addEventListener('click', () => {
+            const input = document.getElementById('command-text');
+            input.value = item.text;
+            localStorage.setItem(COMMAND_DRAFT_KEY, item.text);
+            previewCurrentCommand();
+        });
+        list.appendChild(btn);
+    });
+    box.appendChild(list);
+    box.classList.remove('hidden');
+}
+
+function fuzzyMemoryScore(query, target) {
+    if (!query || !target) return 0;
+    const q = query.toLowerCase();
+    const t = target.toLowerCase();
+    if (t.includes(q)) return 1;
+    let qi = 0;
+    for (let i = 0; i < t.length && qi < q.length; i++) {
+        if (t[i] === q[qi]) qi++;
+    }
+    return qi / Math.max(1, q.length);
+}
+
+function restoreCommandDraft() {
+    const draft = localStorage.getItem(COMMAND_DRAFT_KEY) || '';
+    const input = document.getElementById('command-text');
+    input.value = draft;
+    renderCommandMemory(draft);
+    if (draft.trim()) previewCurrentCommand();
+}
+
 // ============================================================
 // Token Rotation (security)
 // ============================================================
@@ -582,6 +796,7 @@ async function sendCommand() {
     if (!text) return;
 
     const responseDiv = document.getElementById('command-response');
+    const startTime = performance.now();
     responseDiv.textContent = 'Working...';
     renderProgress([
         { label: 'Command received from phone', status: 'success' },
@@ -590,6 +805,17 @@ async function sendCommand() {
     ]);
 
     try {
+        // Check online status — queue offline commands
+        if (!navigator.onLine) {
+            await saveOfflineCommandDraft(text);
+            renderProgress([
+                { label: 'Command received from phone', status: 'success' },
+                { label: 'Saved as draft for manual resend', status: 'pending' },
+            ]);
+            responseDiv.textContent = 'Offline. I saved this as a draft, but I will not auto-run it later. Reconnect and press Send again.';
+            return;
+        }
+
         const response = await fetch(`${API_BASE}/command`, {
             method: 'POST',
             headers: {
@@ -603,6 +829,7 @@ async function sendCommand() {
         });
 
         const data = await response.json();
+        const elapsed = Math.round(performance.now() - startTime);
 
         if (data.requires_approval) {
             renderProgress([
@@ -614,31 +841,149 @@ async function sendCommand() {
             loadApprovals();
         } else {
             const doneStatus = response.ok && data.status !== 'failed' ? 'success' : 'failed';
-            renderProgress([
+
+            // Build rich progress with telemetry
+            const progressSteps = [
                 { label: 'Command received from phone', status: 'success' },
                 { label: summarizeRuntime(data), status: 'success' },
-                { label: 'Tool execution finished', status: doneStatus },
-            ]);
-            responseDiv.textContent = JSON.stringify(data, null, 2);
+            ];
+
+            // Add telemetry timing if available
+            const telemetry = data?.telemetry;
+            if (telemetry) {
+                progressSteps.push({
+                    label: `⚡ ${telemetry.pipeline_ms || elapsed}ms · ${telemetry.tools_succeeded || 0}/${telemetry.tools_executed || 0} tools`,
+                    status: 'success',
+                });
+            }
+
+            progressSteps.push({ label: `Tool execution finished (${elapsed}ms)`, status: doneStatus });
+            renderProgress(progressSteps);
+
+            // Format response with metadata
+            let responseText = data.result || JSON.stringify(data, null, 2);
+            if (telemetry) {
+                responseText += `\n\n── Telemetry ──`;
+                responseText += `\nPipeline: ${telemetry.pipeline_ms}ms`;
+                responseText += `\nTools: ${telemetry.tools_succeeded}/${telemetry.tools_executed} succeeded`;
+                const strategy = telemetry.strategy;
+                if (strategy?.circuit_breaker && Object.keys(strategy.circuit_breaker).length > 0) {
+                    responseText += `\nCircuit: ${Object.keys(strategy.circuit_breaker).length} tool(s) had issues`;
+                }
+            }
+            responseDiv.textContent = responseText;
         }
 
         document.getElementById('command-text').value = '';
+        localStorage.removeItem(COMMAND_DRAFT_KEY);
+        saveCommandToMemory(text);
+        renderPlanPreview(null);
+
+        // Cache command in IndexedDB for offline history
+        cacheForOffline(`last_command_${Date.now()}`, {
+            text, result: data.result, status: data.status, time: Date.now()
+        });
 
     } catch (error) {
-        renderProgress([
-            { label: 'Command received from phone', status: 'success' },
-            { label: 'Network or server error', status: 'failed' },
-        ]);
-        responseDiv.textContent = 'Error: ' + error.message;
+        const elapsed = Math.round(performance.now() - startTime);
+
+        // Try queuing for background sync when offline
+        if (!navigator.onLine) {
+            await saveOfflineCommandDraft(text);
+            renderProgress([
+                { label: 'Command received from phone', status: 'success' },
+                { label: 'Saved as draft for manual resend', status: 'pending' },
+            ]);
+            responseDiv.textContent = 'Offline. Draft saved locally; reconnect and press Send again.';
+        } else {
+            renderProgress([
+                { label: 'Command received from phone', status: 'success' },
+                { label: `Network error after ${elapsed}ms`, status: 'failed' },
+            ]);
+            responseDiv.textContent = 'Error: ' + error.message;
+        }
     }
+}
+
+async function previewCurrentCommand() {
+    const input = document.getElementById('command-text');
+    const text = input?.value.trim();
+    if (!text || !state.deviceId || !state.token) {
+        renderPlanPreview(null);
+        return;
+    }
+    if (!navigator.onLine) {
+        renderPlanPreview({ status: 'offline', message: 'Offline. Plan preview needs the local PC server.' });
+        return;
+    }
+    try {
+        const response = await fetch(`${API_BASE}/command/preview`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${state.token}`,
+            },
+            body: JSON.stringify({ text, device_id: state.deviceId }),
+        });
+        const data = await response.json();
+        renderPlanPreview(data);
+    } catch (error) {
+        renderPlanPreview({ status: 'failed', message: error.message });
+    }
+}
+
+function renderPlanPreview(data) {
+    const box = document.getElementById('plan-preview');
+    if (!box) return;
+    clearNode(box);
+    if (!data) {
+        box.classList.add('hidden');
+        return;
+    }
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const risk = Number(data.risk_level || 0);
+    const riskClass = risk >= 3 ? 'risk-high' : (risk >= 2 ? 'risk-medium' : 'risk-low');
+    [
+        `intent: ${data.intent || data.status || 'unknown'}`,
+        `risk: ${risk}`,
+        data.requires_approval ? 'mobile approval needed' : 'no approval needed',
+        `${data.step_count || 0} step(s)`,
+    ].forEach((label, index) => {
+        const chip = document.createElement('span');
+        chip.className = `plan-chip ${index === 1 ? riskClass : ''}`;
+        chip.textContent = label;
+        meta.appendChild(chip);
+    });
+    box.appendChild(meta);
+    appendText(box, 'div', data.message || 'Plan preview ready.');
+    if (data.plan) {
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(data.plan, null, 2);
+        box.appendChild(pre);
+    }
+    box.classList.remove('hidden');
 }
 
 function summarizeRuntime(data) {
     const runtime = data?.runtime;
-    if (!runtime) return 'Planning and safety checks finished';
-    const tier = runtime.tier || 'selected tier';
-    const reason = runtime.reason || 'runtime selected';
-    return `${tier}: ${reason}`;
+    const telemetry = data?.telemetry;
+    if (!runtime && !telemetry) return 'Planning and safety checks finished';
+
+    let parts = [];
+    if (runtime) {
+        const tier = runtime.tier || runtime.mode || 'auto';
+        const reason = runtime.reason || '';
+        parts.push(reason ? `${tier}: ${reason}` : tier);
+    }
+    if (telemetry) {
+        parts.push(`${telemetry.pipeline_ms || 0}ms`);
+    }
+    const ssdTier = data?.ssd_tier;
+    if (ssdTier?.mode) {
+        parts.push(`placement: ${ssdTier.mode}`);
+    }
+    return parts.join(' · ') || 'Planning and safety checks finished';
 }
 
 function renderProgress(steps) {
@@ -754,34 +1099,88 @@ async function loadHistory() {
             headers: authHeaders(),
         });
         const data = await response.json();
+        state.history = data.history || [];
 
-        const list = document.getElementById('history-list');
-        clearNode(list);
-
-        if (!data.history || data.history.length === 0) {
-            list.appendChild(emptyMessage('No history yet'));
-            return;
-        }
-
-        data.history.forEach(item => {
-            const row = document.createElement('div');
-            row.className = 'history-item';
-            appendText(row, 'div', item.input_text, 'command');
-            appendText(
-                row,
-                'div',
-                `${item.status} - ${new Date(item.created_at).toLocaleString()}`,
-                `status ${item.status}`
-            );
-            if (item.result) {
-                appendText(row, 'div', item.result, 'history-result');
-            }
-            list.appendChild(row);
-        });
+        renderHistory(state.history);
 
     } catch (error) {
         console.error('Failed to load history:', error);
+        // Try IndexedDB cache for offline history
+        try {
+            const cached = await readFromCache('last_history');
+            if (cached) renderHistory(cached);
+        } catch {}
     }
+}
+
+function renderHistory(items) {
+    const list = document.getElementById('history-list');
+    clearNode(list);
+
+    if (!items || items.length === 0) {
+        list.appendChild(emptyMessage('No history yet'));
+        return;
+    }
+
+    // Add search box for fuzzy filtering
+    const searchBox = document.createElement('input');
+    searchBox.type = 'text';
+    searchBox.placeholder = '🔍 Search history...';
+    searchBox.className = 'history-search';
+    searchBox.style.cssText = 'width:100%;padding:8px 12px;margin-bottom:8px;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#e0e0e0;font-size:0.85rem;';
+    let searchTimer = null;
+    searchBox.addEventListener('input', (e) => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(async () => {
+            const q = e.target.value.trim();
+            if (!q) { renderHistory(state.history); return; }
+            // Offload fuzzy search to web worker
+            const filtered = await postToWorker('FUZZY_SEARCH', {
+                query: q,
+                items: items.map(h => ({ ...h, input_text: h.input_text || h.command || '' })),
+            }, 2000);
+            if (filtered && filtered.length > 0) {
+                renderHistoryList(list, filtered);
+            } else {
+                // Fallback: client-side substring
+                const lower = q.toLowerCase();
+                const fallback = items.filter(h =>
+                    (h.input_text || '').toLowerCase().includes(lower) ||
+                    (h.result || '').toLowerCase().includes(lower)
+                );
+                renderHistoryList(list, fallback);
+            }
+        }, 250);
+    });
+    list.appendChild(searchBox);
+
+    renderHistoryList(list, items);
+}
+
+function renderHistoryList(container, items) {
+    // Clear everything except the search box
+    const searchBox = container.querySelector('.history-search');
+    container.innerHTML = '';
+    if (searchBox) container.appendChild(searchBox);
+
+    items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'history-item';
+        appendText(row, 'div', item.input_text, 'command');
+        appendText(
+            row,
+            'div',
+            `${item.status} - ${new Date(item.created_at).toLocaleString()}`,
+            `status ${item.status}`
+        );
+        if (item.result) {
+            appendText(row, 'div', item.result, 'history-result');
+        }
+        if (item._score !== undefined) {
+            appendText(row, 'div', `Relevance: ${Math.round(item._score * 100)}%`, 'history-score');
+        }
+        container.appendChild(row);
+    });
 }
 
 // ============================================================

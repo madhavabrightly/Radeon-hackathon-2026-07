@@ -132,6 +132,12 @@ class CommandRequest(BaseModel):
     device_id: Optional[str] = None
 
 
+class PlanPreviewRequest(BaseModel):
+    """Plan-preview request from mobile remote."""
+    text: str
+    device_id: Optional[str] = None
+
+
 class CommandResponse(BaseModel):
     """Command response to mobile remote."""
     command_id: int
@@ -230,7 +236,7 @@ async def status():
 
 @app.get("/runtime")
 async def runtime_status():
-    """Runtime budget and lazy model status."""
+    """Runtime budget, lazy model status, telemetry, and strategy data."""
     if not agent_router:
         raise HTTPException(status_code=503, detail="Server not ready")
 
@@ -254,7 +260,21 @@ async def runtime_status():
         "ssd_usage": agent_router.ssd_tier.status(),
         "artifacts": agent_router.artifacts.inventory(),
         "screen_cache": agent_router.screen_cache.stats(),
+        "telemetry": agent_router.telemetry.get_live_dashboard(),
+        "strategy": agent_router.strategy.status(),
+        "native_core": {
+            "available": _check_native_core(),
+        },
     }
+
+
+def _check_native_core() -> bool:
+    """Check if the native C core is available."""
+    try:
+        from app.runtime.native_bridge import C_AVAILABLE
+        return C_AVAILABLE
+    except Exception:
+        return False
 
 
 @app.post("/pair")
@@ -439,6 +459,21 @@ async def execute_command(
     )
 
     return result
+
+
+@app.post("/command/preview")
+async def preview_command_plan(
+    request: PlanPreviewRequest,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Preview how a phone text instruction will be interpreted."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+
+    if request.device_id:
+        await require_device_auth(request.device_id, authorization)
+
+    return await agent_router.preview_plan(request.text)
 
 
 @app.get("/approvals/pending")

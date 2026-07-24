@@ -704,3 +704,40 @@ node --check ai_pc_operator/frontend/app.js : pass
 
 - Did not implement stealth, bot-evasion, hidden control, or anti-detection behavior.
 - Stop script was not executed because the local Screen-AI server was still being used.
+
+## 2026-07-24 21:28:08 +05:30
+
+Purpose: verify the relation map and add phone-side command memory plus dry plan preview.
+
+### Changes
+
+- Added `POST /command/preview`.
+- Added `AgentRouter.preview_plan()` for dry planning without executing tools.
+- Added mobile `Preview Plan` and `Restore Draft` controls.
+- Added local JS memory for recent text instructions.
+- Added command draft persistence in `localStorage`.
+- Added IndexedDB offline draft storage.
+- Changed service worker behavior so offline commands are never replayed automatically.
+- Added/validated PWA service worker, web worker, manifest, and offline page.
+- Added native C runtime bridge, native core source/header, build scripts, and strategy/telemetry modules.
+- Synced and corrected `relation-map.md` and `ai_pc_operator/relation-map.md`.
+- Fixed native C allocation safety and missing `stdlib.h`.
+
+### Verification
+
+```text
+python -u ai_pc_operator/backend/test_basic.py : pass
+python -m pytest ai_pc_operator/backend/test_strategy.py -q : 47 passed
+node --check ai_pc_operator/frontend/app.js : pass
+node --check ai_pc_operator/frontend/sw.js : pass
+node --check ai_pc_operator/frontend/worker.js : pass
+python -m py_compile router/main/strategy/telemetry/native_bridge : pass
+cmd /d /c ai_pc_operator/backend/build.bat : produced Windows native DLL/import artifacts, exit 0
+bash ai_pc_operator/backend/build.sh : script reached compiler check; gcc/clang unavailable in this Windows bash
+cmd /c fc relation-map.md ai_pc_operator/relation-map.md : no differences
+```
+
+### Notes
+
+- Offline commands are saved as drafts only. They require the user to reconnect and press `Send`.
+- The Windows shell prints a stray environment message after `build.bat`, but the build succeeds and exits `0`.

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Optional, Dict, Any, List
 
 from app.agent.llm_planner import LLMPlanner
@@ -39,6 +40,8 @@ from app.runtime.resource_budget import ResourceBudget
 from app.runtime.screen_cache import ScreenCache
 from app.runtime.ssd_tier import SSDTierManager
 from app.runtime.tier_manager import AgentTierManager
+from app.runtime.strategy import StrategyRouter
+from app.runtime.telemetry import Telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +75,8 @@ class AgentRouter:
         self.model_registry = ModelRegistry(self.resource_budget, self.io_pool, self.ssd_tier)
         self.heatmap = ToolHeatMap()
         self.tier_manager = AgentTierManager()
+        self.strategy = StrategyRouter()
+        self.telemetry = Telemetry()
         self._register_lazy_models()
 
         # Tool registry
@@ -133,6 +138,7 @@ class AgentRouter:
             }
 
         logger.info(f"Processing command: {text}")
+        pipeline_start = time.time()
 
         # Step 1: Save command
         command_id = await self._save_command(text, device_id)
@@ -244,7 +250,7 @@ class AgentRouter:
                 await self.memory.add(self.redactor.redact(text), intent, response)
                 return response
 
-            # Step 7: Execute tools
+            # Step 7: Execute tools via strategy engine (circuit breaker + retry)
             results = []
             for step in steps:
                 if self.emergency_stopped:
@@ -252,14 +258,29 @@ class AgentRouter:
 
                 tool_name = step.get("tool")
                 tool_args = step.get("args", {})
+                tool_start = time.time()
 
-                result = await self._execute_tool(tool_name, tool_args, command_id)
+                # Use strategy engine for circuit breaker + adaptive retry
+                async def _exec(tool, args):
+                    return await self._execute_tool(tool, args, command_id)
+
+                result = await self.strategy.execute_with_strategy(
+                    tool_name, tool_args, _exec, intent=intent, command_id=command_id
+                )
+
+                # Record telemetry for tool call
+                tool_latency = (time.time() - tool_start) * 1000
+                self.telemetry.record_tool_call(
+                    command_id, tool_name, tool_latency,
+                    result.get("status") == "success"
+                )
                 results.append(result)
 
             # Step 8: Verify results
             verified = all(r.get("status") == "success" for r in results)
 
-            # Step 9: Format response
+            # Step 9: Format response with telemetry + strategy data
+            pipeline_ms = (time.time() - pipeline_start) * 1000
             response = {
                 "command_id": command_id,
                 "status": "completed" if verified else "partial",
@@ -267,6 +288,12 @@ class AgentRouter:
                 "requires_approval": requires_approval,
                 "runtime": tier_decision.to_dict(),
                 "ssd_tier": ssd_plan.to_dict(),
+                "telemetry": {
+                    "pipeline_ms": round(pipeline_ms, 1),
+                    "tools_executed": len(results),
+                    "tools_succeeded": sum(1 for r in results if r.get("status") == "success"),
+                    "strategy": self.strategy.status(),
+                },
             }
 
             await self._update_command_status(
@@ -274,6 +301,9 @@ class AgentRouter:
                 "completed" if verified else "partial",
                 response["result"],
             )
+
+            # Record intent success in telemetry
+            self.telemetry.record_intent(intent)
 
             # Save to memory
             await self.memory.add(self.redactor.redact(text), intent, response)
@@ -293,6 +323,58 @@ class AgentRouter:
             }
         finally:
             await self._maintenance()
+
+    async def preview_plan(self, text: str) -> Dict[str, Any]:
+        """Return the planned interpretation of a command without executing it."""
+        budget = await asyncio.to_thread(self.resource_budget.measure)
+        task_plan = self.task_planner.plan(text)
+        intent = task_plan.intent if task_plan else await self.planner.classify_intent(text)
+        ssd_plan = self.ssd_tier.plan(
+            budget,
+            self.artifacts,
+            self.resource_budget.reserve_mb,
+        )
+        llm_plan: Dict[str, Any] | None = None
+        qwen_allowed = self.ssd_tier.can_load("qwen-1.5b-q4", ssd_plan)
+        if intent == "unknown" and budget.allow_llm and qwen_allowed:
+            qwen = await self.model_registry.get("qwen-1.5b-q4")
+            llm_plan = await self.llm_planner.create_plan(text, qwen)
+            if llm_plan:
+                intent = llm_plan.get("intent", intent)
+
+        risk_level = await self.risk_classifier.assess(text, intent)
+        if llm_plan:
+            risk_level = max(risk_level, int(llm_plan.get("risk_level", 1)))
+        requires_approval = self.permission_engine.requires_approval(
+            risk_level,
+            intent,
+        )
+        plan = (
+            task_plan.to_dict()
+            if task_plan
+            else llm_plan or await self.planner.create_plan(text, intent)
+        )
+        steps = plan.get("steps", [])
+        return {
+            "status": "planned" if steps else "unsupported",
+            "input": self.redactor.redact(text),
+            "intent": intent,
+            "risk_level": risk_level,
+            "requires_approval": requires_approval,
+            "plan": self.redactor.redact_dict(plan),
+            "step_count": len(steps),
+            "runtime": self.tier_manager.decide(
+                intent,
+                budget,
+                self.heatmap.hot_models_for_intent(intent),
+            ).to_dict(),
+            "ssd_tier": ssd_plan.to_dict(),
+            "message": (
+                "Ready to execute after Send."
+                if steps
+                else plan.get("error", "No safe executable plan was found.")
+            ),
+        }
 
     async def _execute_tool(
         self,

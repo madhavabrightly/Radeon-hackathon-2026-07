@@ -488,6 +488,95 @@ input[type="text"]:focus {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
+.command-assist {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.small-btn {
+    width: 100%;
+    margin-top: 0;
+    padding: 10px;
+    font-size: 0.88em;
+}
+
+.plan-preview,
+.command-memory {
+    background: #151515;
+    border: 1px solid #2d2d2d;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+    color: #ddd;
+    font-size: 0.9em;
+}
+
+.plan-preview .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.plan-chip {
+    border: 1px solid #333;
+    border-radius: 999px;
+    padding: 3px 8px;
+    color: #bbb;
+    background: #101010;
+    font-size: 0.82em;
+}
+
+.plan-chip.risk-high {
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.35);
+}
+
+.plan-chip.risk-medium {
+    color: #facc15;
+    border-color: rgba(250, 204, 21, 0.35);
+}
+
+.plan-chip.risk-low {
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.35);
+}
+
+.plan-preview pre {
+    margin-top: 8px;
+    white-space: pre-wrap;
+    color: #aaa;
+    font-size: 0.82em;
+}
+
+.memory-title {
+    color: #888;
+    margin-bottom: 8px;
+    font-size: 0.82em;
+}
+
+.memory-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.memory-item {
+    width: auto;
+    max-width: 100%;
+    padding: 8px 10px;
+    border-radius: 999px;
+    border: 1px solid #333;
+    background: #101010;
+    color: #ddd;
+    font-size: 0.82em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .response {
     background: #1a1a1a;
     padding: 15px;

@@ -751,3 +751,44 @@ Remaining:
 **Last Updated**: 2026-07-24 19:24:26 +05:30
 **Version**: 1.3.6
 **Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-24 21:28:08 +05:30
+
+Focus: verify the new relation map and make phone text instructions easier for the agent to understand before execution.
+
+Added:
+
+- `AgentRouter.preview_plan()` and `POST /command/preview`.
+- Mobile plan preview with intent, risk, approval requirement, runtime info, and redacted tool steps.
+- Lightweight JS command memory using `localStorage`.
+- Command draft restore using `localStorage`.
+- IndexedDB offline draft storage.
+- PWA service worker and web worker files.
+- Native C core bridge, build scripts, and strategy/telemetry runtime modules.
+
+Corrected:
+
+- Relation maps now reference `process_command()` and `preview_plan()` instead of stale `route_command()`.
+- Offline commands are drafts only; they do not auto-run when network returns.
+- Native C core includes `stdlib.h` and handles allocation failure.
+- `build.bat` was cleaned up and produces the native DLL/import files.
+
+Validated:
+
+- `python -u ai_pc_operator/backend/test_basic.py`: pass.
+- `python -m pytest ai_pc_operator/backend/test_strategy.py -q`: 47 passed.
+- `node --check ai_pc_operator/frontend/app.js`: pass.
+- `node --check ai_pc_operator/frontend/sw.js`: pass.
+- `node --check ai_pc_operator/frontend/worker.js`: pass.
+- `python -m py_compile` for router, main, strategy, telemetry, and native bridge: pass.
+- `cmd /d /c ai_pc_operator/backend/build.bat`: produced Windows native artifacts; command exits `0`.
+- `bash ai_pc_operator/backend/build.sh`: script is valid, but this Windows bash environment does not expose gcc/clang.
+- `relation-map.md` and `ai_pc_operator/relation-map.md`: identical.
+
+Note:
+
+- The Windows shell still prints a stray environment message after `build.bat`, but the build command exits `0` and artifacts are produced.
+
+**Last Updated**: 2026-07-24 21:28:08 +05:30
+**Version**: 1.3.7
+**Maintainer**: Screen-AI Team
