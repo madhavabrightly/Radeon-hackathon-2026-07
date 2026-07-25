@@ -77,15 +77,20 @@ class SystemTools:
         ],
     }
 
-    COMMON_SEARCH_DIRS = [
+    SHORTCUT_SEARCH_DIRS = [
         r"%APPDATA%\Microsoft\Windows\Start Menu\Programs",
         r"%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs",
         r"%USERPROFILE%\Desktop",
         r"%PUBLIC%\Desktop",
+    ]
+
+    EXE_SEARCH_DIRS = [
         r"%LOCALAPPDATA%\Programs",
         r"%PROGRAMFILES%",
         r"%PROGRAMFILES(X86)%",
     ]
+
+    COMMON_SEARCH_DIRS = SHORTCUT_SEARCH_DIRS + EXE_SEARCH_DIRS
 
     APP_MATCH_STOPWORDS = {
         "app",
@@ -401,7 +406,7 @@ class SystemTools:
                 best = candidate
                 best_score = score
 
-        if not best or best_score < 0.72:
+        if not best or best_score < 0.91:
             return None
 
         return self._app_match(
@@ -429,12 +434,13 @@ class SystemTools:
 
     def _discover_shortcuts(self) -> list[dict[str, Any]]:
         apps: list[dict[str, Any]] = []
-        suffixes = {".lnk": "shortcut", ".appref-ms": "shortcut", ".url": "url", ".exe": "exe"}
-        for raw_dir in self.COMMON_SEARCH_DIRS:
+        shortcut_suffixes = {".lnk": "shortcut", ".appref-ms": "shortcut", ".url": "url"}
+        exe_suffixes = {".exe": "exe"}
+        for raw_dir in self.SHORTCUT_SEARCH_DIRS:
             root = Path(os.path.expandvars(raw_dir))
             if not root.exists():
                 continue
-            for path in self._iter_app_paths(root, suffixes):
+            for path in self._iter_app_paths(root, shortcut_suffixes, max_depth=8, max_items=700):
                 stem = path.stem
                 apps.append(
                     {
@@ -443,21 +449,60 @@ class SystemTools:
                         "normalized_name": self._normalize_app_name(stem),
                         "stem": stem.lower(),
                         "normalized_stem": self._normalize_app_name(stem),
-                        "launch_type": suffixes[path.suffix.lower()],
+                        "launch_type": shortcut_suffixes[path.suffix.lower()],
                         "launch_value": str(path),
                         "source": "start-menu" if "start menu" in str(root).lower() else "filesystem",
                     }
                 )
+        for raw_dir in self.EXE_SEARCH_DIRS:
+            root = Path(os.path.expandvars(raw_dir))
+            if not root.exists():
+                continue
+            for path in self._iter_app_paths(root, exe_suffixes, max_depth=3, max_items=180):
+                stem = path.stem
+                apps.append(
+                    {
+                        "display_name": stem,
+                        "name": stem.lower(),
+                        "normalized_name": self._normalize_app_name(stem),
+                        "stem": stem.lower(),
+                        "normalized_stem": self._normalize_app_name(stem),
+                        "launch_type": exe_suffixes[path.suffix.lower()],
+                        "launch_value": str(path),
+                        "source": "filesystem",
+                    }
+                )
         return apps
 
-    def _iter_app_paths(self, root: Path, suffixes: set[str]) -> list[Path]:
+    def _iter_app_paths(
+        self,
+        root: Path,
+        suffixes: dict[str, str],
+        max_depth: int,
+        max_items: int,
+    ) -> list[Path]:
         found: list[Path] = []
+        deadline = time.monotonic() + 1.25
+        stack: list[tuple[Path, int]] = [(root, 0)]
         try:
-            for path in root.rglob("*"):
-                if len(found) >= 600:
-                    break
-                if path.is_file() and path.suffix.lower() in suffixes:
-                    found.append(path)
+            while stack and len(found) < max_items and time.monotonic() < deadline:
+                current, depth = stack.pop()
+                if depth > max_depth:
+                    continue
+                try:
+                    entries = list(current.iterdir())
+                except (OSError, PermissionError):
+                    continue
+                for path in entries:
+                    if len(found) >= max_items or time.monotonic() >= deadline:
+                        break
+                    try:
+                        if path.is_file() and path.suffix.lower() in suffixes:
+                            found.append(path)
+                        elif path.is_dir() and depth < max_depth:
+                            stack.append((path, depth + 1))
+                    except (OSError, PermissionError):
+                        continue
         except (OSError, PermissionError):
             pass
         return found

@@ -213,11 +213,13 @@ async def test_system_app_resolution():
     with tempfile.TemporaryDirectory() as tmpdir:
         shortcut = Path(tmpdir) / "Snake Lite.lnk"
         shortcut.write_text("", encoding="utf-8")
-        original_dirs = tools.COMMON_SEARCH_DIRS
+        original_shortcut_dirs = tools.SHORTCUT_SEARCH_DIRS
+        original_exe_dirs = tools.EXE_SEARCH_DIRS
         original_cache = tools._app_index_cache
         original_cache_time = tools._app_index_cache_time
         try:
-            tools.COMMON_SEARCH_DIRS = [tmpdir]
+            tools.SHORTCUT_SEARCH_DIRS = [tmpdir]
+            tools.EXE_SEARCH_DIRS = []
             tools._app_index_cache = None
             tools._app_index_cache_time = 0.0
             match = tools._resolve_app_match("snakelite")
@@ -225,7 +227,8 @@ async def test_system_app_resolution():
             assert match["launch_type"] == "shortcut"
             print("[ok] snakelite fuzzy matched Snake Lite shortcut")
         finally:
-            tools.COMMON_SEARCH_DIRS = original_dirs
+            tools.SHORTCUT_SEARCH_DIRS = original_shortcut_dirs
+            tools.EXE_SEARCH_DIRS = original_exe_dirs
             tools._app_index_cache = original_cache
             tools._app_index_cache_time = original_cache_time
 
