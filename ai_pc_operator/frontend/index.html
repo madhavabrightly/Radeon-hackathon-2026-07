@@ -81,13 +81,16 @@
         <div id="main-screen" class="screen">
             <div class="header">
                 <div class="brand-block">
-                    <h1>Screen-AI</h1>
-                    <div id="connection-badge" class="connection-badge" data-state="offline" aria-live="polite">
-                        <span class="connection-dot"></span>
-                        <span id="connection-label">Offline</span>
+                    <div class="chat-avatar" aria-hidden="true">S</div>
+                    <div>
+                        <h1>Screen-AI</h1>
+                        <div id="connection-badge" class="connection-badge" data-state="offline" aria-live="polite">
+                            <span class="connection-dot"></span>
+                            <span id="connection-label">Offline</span>
+                        </div>
                     </div>
                 </div>
-                <button id="emergency-stop" class="emergency-btn">🛑 STOP</button>
+                <button id="emergency-stop" class="emergency-btn">STOP</button>
             </div>
 
             <div class="tabs">
@@ -99,21 +102,35 @@
 
             <!-- Command Tab -->
             <div id="command-tab" class="tab-content active">
-                <div class="command-input">
-                    <textarea
-                        id="command-text"
-                        placeholder="Type a command...&#10;e.g., 'Check my storage'&#10;'Open Chrome'&#10;'Delete files in Downloads'"
-                    ></textarea>
-                    <button id="send-command">Send</button>
+                <div class="chat-shell">
+                    <div id="chat-thread" class="chat-thread" aria-live="polite">
+                        <div class="chat-day">Today</div>
+                        <div class="message-row incoming">
+                            <div class="message-bubble">
+                                <div class="message-text">Connected console ready. Send a command from here and I will route it through the local PC agent.</div>
+                                <div class="message-time">Screen-AI</div>
+                            </div>
+                        </div>
+                        <div id="plan-preview" class="plan-preview hidden"></div>
+                        <div id="command-memory" class="command-memory hidden"></div>
+                        <div id="command-progress" class="progress-list hidden" aria-live="polite"></div>
+                        <div id="command-response" class="response"></div>
+                    </div>
+                    <div class="composer-panel">
+                        <div class="command-assist">
+                            <button id="preview-command" class="secondary-btn small-btn">Preview</button>
+                            <button id="restore-draft" class="secondary-btn small-btn">Draft</button>
+                        </div>
+                        <div class="command-input">
+                            <textarea
+                                id="command-text"
+                                placeholder="Message Screen-AI"
+                                rows="1"
+                            ></textarea>
+                            <button id="send-command" aria-label="Send command">Send</button>
+                        </div>
+                    </div>
                 </div>
-                <div class="command-assist">
-                    <button id="preview-command" class="secondary-btn small-btn">Preview Plan</button>
-                    <button id="restore-draft" class="secondary-btn small-btn">Restore Draft</button>
-                </div>
-                <div id="plan-preview" class="plan-preview hidden"></div>
-                <div id="command-memory" class="command-memory hidden"></div>
-                <div id="command-progress" class="progress-list hidden" aria-live="polite"></div>
-                <div id="command-response" class="response"></div>
             </div>
 
             <!-- Approvals Tab -->

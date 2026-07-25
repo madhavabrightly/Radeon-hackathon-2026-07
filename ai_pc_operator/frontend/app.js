@@ -581,6 +581,29 @@ function emptyMessage(text) {
     return p;
 }
 
+function appendChatMessage(direction, text, label = '') {
+    const thread = document.getElementById('chat-thread');
+    if (!thread || !text) return null;
+    const row = document.createElement('div');
+    row.className = `message-row ${direction === 'outgoing' ? 'outgoing' : 'incoming'}`;
+    const bubble = document.createElement('div');
+    bubble.className = 'message-bubble';
+    appendText(bubble, 'div', text, 'message-text');
+    appendText(bubble, 'div', label || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 'message-time');
+    row.appendChild(bubble);
+    thread.appendChild(row);
+    scrollChatToBottom();
+    return row;
+}
+
+function scrollChatToBottom() {
+    const thread = document.getElementById('chat-thread');
+    if (!thread) return;
+    requestAnimationFrame(() => {
+        thread.scrollTop = thread.scrollHeight;
+    });
+}
+
 function appendText(parent, tag, text, className = '') {
     const el = document.createElement(tag);
     if (className) el.className = className;
@@ -801,6 +824,8 @@ async function sendCommand() {
     const responseDiv = document.getElementById('command-response');
     const startTime = performance.now();
     responseDiv.textContent = 'Working...';
+    appendChatMessage('outgoing', text);
+    const workingMessage = appendChatMessage('incoming', 'Working on it...', 'Screen-AI');
     renderProgress([
         { label: 'Command received from phone', status: 'success' },
         { label: 'Planning, risk check, and model budget selection', status: 'running' },
@@ -815,7 +840,10 @@ async function sendCommand() {
                 { label: 'Command received from phone', status: 'success' },
                 { label: 'Saved as draft for manual resend', status: 'pending' },
             ]);
-            responseDiv.textContent = 'Offline. I saved this as a draft, but I will not auto-run it later. Reconnect and press Send again.';
+            const offlineText = 'Offline. I saved this as a draft, but I will not auto-run it later. Reconnect and press Send again.';
+            responseDiv.textContent = offlineText;
+            if (workingMessage) workingMessage.querySelector('.message-text').textContent = offlineText;
+            scrollChatToBottom();
             return;
         }
 
@@ -840,7 +868,10 @@ async function sendCommand() {
                 { label: 'Risk check requires mobile approval', status: 'running' },
                 { label: `Approval request ${data.approval_id}`, status: 'pending' },
             ]);
-            responseDiv.textContent = `Waiting for approval...\nApproval ID: ${data.approval_id}`;
+            const approvalText = `Waiting for approval...\nApproval ID: ${data.approval_id}`;
+            responseDiv.textContent = approvalText;
+            if (workingMessage) workingMessage.querySelector('.message-text').textContent = approvalText;
+            scrollChatToBottom();
             loadApprovals();
         } else {
             const doneStatus = response.ok && data.status !== 'failed' ? 'success' : 'failed';
@@ -875,6 +906,8 @@ async function sendCommand() {
                 }
             }
             responseDiv.textContent = responseText;
+            if (workingMessage) workingMessage.querySelector('.message-text').textContent = responseText;
+            scrollChatToBottom();
         }
 
         document.getElementById('command-text').value = '';
@@ -897,13 +930,19 @@ async function sendCommand() {
                 { label: 'Command received from phone', status: 'success' },
                 { label: 'Saved as draft for manual resend', status: 'pending' },
             ]);
-            responseDiv.textContent = 'Offline. Draft saved locally; reconnect and press Send again.';
+            const offlineText = 'Offline. Draft saved locally; reconnect and press Send again.';
+            responseDiv.textContent = offlineText;
+            if (workingMessage) workingMessage.querySelector('.message-text').textContent = offlineText;
+            scrollChatToBottom();
         } else {
             renderProgress([
                 { label: 'Command received from phone', status: 'success' },
                 { label: `Network error after ${elapsed}ms`, status: 'failed' },
             ]);
-            responseDiv.textContent = 'Error: ' + error.message;
+            const errorText = 'Error: ' + error.message;
+            responseDiv.textContent = errorText;
+            if (workingMessage) workingMessage.querySelector('.message-text').textContent = errorText;
+            scrollChatToBottom();
         }
     }
 }
@@ -1054,6 +1093,7 @@ function renderPlanPreview(data) {
         box.appendChild(memoryBox);
     }
     box.classList.remove('hidden');
+    scrollChatToBottom();
 }
 
 function summarizeRuntime(data) {
@@ -1092,6 +1132,7 @@ function renderProgress(steps) {
         box.appendChild(row);
     });
     box.classList.remove('hidden');
+    scrollChatToBottom();
 }
 
 // ============================================================
