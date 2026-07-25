@@ -4,6 +4,12 @@
 
 Screen-AI is a local agentic desktop operator accelerated by AMD ROCm for screen perception, model distillation, and lightweight inference. The phone is the command + approval + unlock device.
 
+## Radeon Hackathon Submission
+
+This repository is prepared for `madhavabrightly/Radeon-hackathon-2026-07`.
+The original Radeon Cloud setup guide is preserved in `Radeon-Cloud-User Guide/`.
+Submission track: **Track 2: Agentic AI**.
+
 ## Track
 
 ```
