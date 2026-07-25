@@ -31,6 +31,25 @@ Tool Executor
 File/Browser/App/System/Vault/Passkey/Download/Screen tools
 ```
 
+## Current Model Routing
+
+Updated: 2026-07-25 17:55:31 +05:30
+
+- `app/runtime/model_insights.py` is the metadata-only model route brain.
+- `/runtime` exposes `model_insights`.
+- `/command/preview` and command execution return `model_plan`.
+- Phone `worker.js` gives instant `MODEL_ROUTE_HINT` and `MEMORY_SCORE_COMMAND`.
+- Phone `app.js` renders model lanes before and after backend preview.
+
+Model roles:
+
+| Model | Use |
+|-------|-----|
+| Qwen2.5 Coder 1.5B Q4 | complex/unknown command planning; SSD mmap, no low-RAM prefetch |
+| OCR det v3 | text region detection; ONNX, fast perception |
+| OCR rec English | text recognition; ONNX, fast perception |
+| OmniParser v2 icon detect | teacher/high-confidence fallback; not default 4GB resident |
+
 ## Key Principles
 
 1. **Local-first**: Everything runs on user's PC

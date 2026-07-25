@@ -21,6 +21,10 @@ ai_pc_operator/data/quarantine/
 ai_pc_operator/data/memory/
 ai_pc_operator/data/.screen_ai_cache/
 ai_pc_operator/data/certs/
+ai_pc_operator/data/models/*_INSPECTION.txt
+ai_pc_operator/data/models/*_DEEP_REPORT.txt
+ai_pc_operator/data/models/teachers/*_INSPECTION.txt
+ai_pc_operator/backend/.installed
 ai_pc_operator/ai_pc_operator/
 hackathon_ui_operator_distill/data/raw_screenshots/*.png
 hackathon_ui_operator_distill/data/raw_screenshots/*.jpg

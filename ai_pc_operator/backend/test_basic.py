@@ -285,6 +285,42 @@ async def test_model_artifacts_and_prompts():
     print(f"[ok] Screen cache stats: {cache.stats()}")
 
 
+async def test_model_insights():
+    """Test inspection-derived model metadata and route planning."""
+    from app.runtime.artifact_store import ArtifactStore
+    from app.runtime.model_insights import ModelInsights
+    from app.runtime.resource_budget import RuntimeBudget
+
+    print("\nTesting model insights...")
+    insights = ModelInsights(ArtifactStore())
+    summary = insights.summary()
+    models = summary["models"]
+    assert "qwen-1.5b-q4" in models
+    assert models["qwen-1.5b-q4"]["facts"]["context_length"] == 32768
+    assert models["ocr-det-v3"]["facts"]["input"] == "N x 3 x H x W"
+    assert models["ocr-rec-english"]["facts"]["output"] == "N x T x 438"
+    assert not models["omniparser-v2-icon-detect"]["prefetch_policy"].startswith("prefetch")
+
+    low_budget = RuntimeBudget(
+        available_mb=1400,
+        model_budget_mb=500,
+        allow_ocr=True,
+        allow_detector=True,
+        allow_llm=False,
+        mode="perception-only",
+    )
+    plan = insights.plan_for_command(
+        "scan screen and click the Share button",
+        "screen_click",
+        low_budget,
+        [],
+    )
+    assert "ocr-mobile" in plan["recommended"]
+    assert "qwen-1.5b-q4" not in plan["prefetch"]
+    assert plan["teacher_fallback"]["enabled_by_default"] is False
+    print(f"[ok] Model lanes: {[lane['lane'] for lane in plan['lanes']]}")
+
+
 async def test_pairing_token_verification():
     """Test paired devices must present the matching token."""
     from app.security.pairing import PairingManager
@@ -319,6 +355,7 @@ async def main():
         await test_runtime_pipeline()
         await test_ssd_tier_plan()
         await test_model_artifacts_and_prompts()
+        await test_model_insights()
         await test_pairing_token_verification()
 
         print("\n" + "=" * 60)

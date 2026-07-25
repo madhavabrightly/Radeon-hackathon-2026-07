@@ -1,5 +1,64 @@
 # Screen-AI Run Change Log
 
+## 2026-07-25 17:55:31 +05:30
+
+Purpose: turn the inspected local model reports into real runtime routing and visible phone-side intelligence.
+
+### Model Intelligence
+
+- Added `ai_pc_operator/backend/app/runtime/model_insights.py`.
+- Encoded inspection facts for:
+  - Qwen2.5 Coder 1.5B Instruct Q4_0 GGUF
+  - OCR detection v3 ONNX
+  - OCR English recognition ONNX
+  - OmniParser v2 icon detect YOLO teacher
+- Added model lanes:
+  - `fast-perception`
+  - `browser-tools`
+  - `secure-vault`
+  - `reasoning`
+  - `teacher`
+- Qwen is planned as SSD/mmap/on-demand, not a speculative low-RAM prefetch.
+- OmniParser is explicitly marked teacher/high-confidence fallback only.
+
+### Backend Wiring
+
+- `AgentRouter` now owns `ModelInsights`.
+- Command execution and `/command/preview` include `model_plan`.
+- `/runtime` now exposes `model_insights`.
+- Model prefetch now merges tier decisions with model-insight prefetch suggestions.
+
+### Phone / JavaScript Memory
+
+- Added worker messages:
+  - `MODEL_ROUTE_HINT`
+  - `MEMORY_SCORE_COMMAND`
+- The phone command box now renders a local route hint while the backend preview is loading.
+- The preview panel shows recommended model lanes, budget mode, and teacher fallback status.
+- Runtime/model plan snapshots are cached locally and in IndexedDB.
+
+### Documentation
+
+- Added `ai_pc_operator/docs/MODEL_INSIGHTS.md`.
+- Updated `AGENTS.md` and `MEMORY.md` with the model routing baseline.
+
+### Verification
+
+```text
+python -m py_compile ai_pc_operator\backend\app\runtime\model_insights.py ai_pc_operator\backend\app\agent\router.py ai_pc_operator\backend\app\main.py
+node --check ai_pc_operator\frontend\app.js
+node --check ai_pc_operator\frontend\worker.js
+python -u ai_pc_operator\backend\test_basic.py
+python -m pytest ai_pc_operator\backend\test_strategy.py -q
+```
+
+Result:
+
+```text
+test_basic.py: pass
+test_strategy.py: 47 passed
+```
+
 ## 2026-07-24 19:03:38 +05:30
 
 Purpose: make the agent less one-shot and more capable for compound desktop tasks.

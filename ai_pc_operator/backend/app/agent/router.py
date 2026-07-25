@@ -35,6 +35,7 @@ from app.runtime.model_loaders import (
     ui_detector_loader,
     vault_crypto_loader,
 )
+from app.runtime.model_insights import ModelInsights
 from app.runtime.model_registry import ModelRegistry, ModelSpec
 from app.runtime.resource_budget import ResourceBudget
 from app.runtime.screen_cache import ScreenCache
@@ -70,6 +71,7 @@ class AgentRouter:
         self.resource_budget = ResourceBudget()
         self.io_pool = IOPool(max_workers=2)
         self.artifacts = ArtifactStore()
+        self.model_insights = ModelInsights(self.artifacts)
         self.ssd_tier = SSDTierManager()
         self.screen_cache = ScreenCache()
         self.model_registry = ModelRegistry(self.resource_budget, self.io_pool, self.ssd_tier)
@@ -166,6 +168,12 @@ class AgentRouter:
                 if llm_plan:
                     intent = llm_plan.get("intent", intent)
                     logger.info("LLM planner produced a plan for unknown intent")
+            model_plan = self.model_insights.plan_for_command(
+                text,
+                intent,
+                budget,
+                self.heatmap.hot_models_for_intent(intent),
+            )
 
             # Step 3: assess risk while runtime tiers/prefetch are decided.
             risk_task = asyncio.create_task(
@@ -175,7 +183,7 @@ class AgentRouter:
             tier_decision = self.tier_manager.decide(intent, budget, hot_models)
             prefetch_models = [
                 name
-                for name in tier_decision.prefetch_models
+                for name in [*tier_decision.prefetch_models, *model_plan.get("prefetch", [])]
                 if self.ssd_tier.should_prefetch(name, ssd_plan)
             ]
             self.model_registry.prefetch(prefetch_models)
@@ -241,6 +249,7 @@ class AgentRouter:
                     "requires_approval": requires_approval,
                     "runtime": tier_decision.to_dict(),
                     "ssd_tier": ssd_plan.to_dict(),
+                    "model_plan": model_plan,
                 }
                 await self._update_command_status(
                     command_id,
@@ -288,6 +297,7 @@ class AgentRouter:
                 "requires_approval": requires_approval,
                 "runtime": tier_decision.to_dict(),
                 "ssd_tier": ssd_plan.to_dict(),
+                "model_plan": model_plan,
                 "telemetry": {
                     "pipeline_ms": round(pipeline_ms, 1),
                     "tools_executed": len(results),
@@ -349,6 +359,12 @@ class AgentRouter:
             risk_level,
             intent,
         )
+        model_plan = self.model_insights.plan_for_command(
+            text,
+            intent,
+            budget,
+            self.heatmap.hot_models_for_intent(intent),
+        )
         plan = (
             task_plan.to_dict()
             if task_plan
@@ -369,6 +385,7 @@ class AgentRouter:
                 self.heatmap.hot_models_for_intent(intent),
             ).to_dict(),
             "ssd_tier": ssd_plan.to_dict(),
+            "model_plan": model_plan,
             "message": (
                 "Ready to execute after Send."
                 if steps

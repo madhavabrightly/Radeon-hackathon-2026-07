@@ -256,6 +256,7 @@ async def runtime_status():
             "allow_llm": budget.allow_llm,
         },
         "models": agent_router.model_registry.status(),
+        "model_insights": agent_router.model_insights.summary(),
         "ssd_tier": ssd_plan.to_dict(),
         "ssd_usage": agent_router.ssd_tier.status(),
         "artifacts": agent_router.artifacts.inventory(),

@@ -58,6 +58,14 @@ self.onmessage = async function (e) {
         self.postMessage({ type, id, result: batchRedact(payload.texts, payload.patterns) });
         break;
 
+      case 'MODEL_ROUTE_HINT':
+        self.postMessage({ type, id, result: modelRouteHint(payload.text, payload.memory || []) });
+        break;
+
+      case 'MEMORY_SCORE_COMMAND':
+        self.postMessage({ type, id, result: scoreCommandMemory(payload.text, payload.memory || []) });
+        break;
+
       default:
         self.postMessage({ type, id, error: `Unknown type: ${type}` });
     }
@@ -181,6 +189,72 @@ function parseCommands(raw) {
   } catch {
     return [];
   }
+}
+
+/* ─── Local Model Route + Memory Hints ─────────────────────── */
+
+function modelRouteHint(text, memory) {
+  const lower = (text || '').toLowerCase();
+  const lanes = [];
+  const models = new Set(['rule-planner', 'native-core']);
+
+  if (/\b(screen|button|click|window|ui|ocr|read|scan)\b/.test(lower)) {
+    lanes.push({
+      lane: 'fast-perception',
+      models: ['ocr-det-v3', 'ocr-rec-english'],
+      mode: 'parallel',
+    });
+    models.add('ocr-mobile');
+    models.add('ui-detector-int8');
+  }
+
+  if (/\b(chrome|browser|search|website|webpage|download|research|google)\b/.test(lower)) {
+    lanes.push({
+      lane: 'browser-tools',
+      models: ['browser-warmup'],
+      mode: 'warm-import',
+    });
+    models.add('browser-warmup');
+  }
+
+  if (/\b(login|password|passkey|credential|vault|unlock)\b/.test(lower)) {
+    lanes.push({
+      lane: 'secure-vault',
+      models: ['vault-crypto'],
+      mode: 'resident',
+    });
+    models.add('vault-crypto');
+  }
+
+  if (/\b(plan|compare|analyze|summarize|decide|complex|unknown)\b/.test(lower)) {
+    lanes.push({
+      lane: 'reasoning',
+      models: ['qwen-1.5b-q4'],
+      mode: 'ssd-mmap-on-demand',
+    });
+    models.add('qwen-1.5b-q4');
+  }
+
+  const memoryMatches = scoreCommandMemory(text, memory).slice(0, 3);
+  return {
+    source: 'phone-worker',
+    lanes: lanes.length ? lanes : [{ lane: 'tier0-rules', models: ['rule-planner'], mode: 'resident' }],
+    recommended: Array.from(models),
+    memory_matches: memoryMatches,
+  };
+}
+
+function scoreCommandMemory(text, memory) {
+  const query = (text || '').trim().toLowerCase();
+  if (!query || !Array.isArray(memory)) return [];
+  return memory
+    .map((item) => {
+      const target = (item.text || item.command || item.input_text || '').toLowerCase();
+      return { ...item, _score: computeFuzzyScore(query, target) };
+    })
+    .filter((item) => item._score > 0.2)
+    .sort((a, b) => b._score - a._score)
+    .slice(0, 8);
 }
 
 /* ─── Debounced Progress ───────────────────────────────────── */

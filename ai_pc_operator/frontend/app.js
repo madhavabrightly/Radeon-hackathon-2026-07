@@ -28,6 +28,7 @@ let appWorker = null;
 let previewTimer = null;
 const COMMAND_MEMORY_KEY = 'screenai_command_memory_v1';
 const COMMAND_DRAFT_KEY = 'screenai_command_draft_v1';
+const RUNTIME_SNAPSHOT_KEY = 'screenai_runtime_snapshot_v1';
 
 // Register Service Worker for PWA / offline
 if ('serviceWorker' in navigator) {
@@ -213,6 +214,7 @@ function setupEventListeners() {
             const value = commandText.value;
             localStorage.setItem(COMMAND_DRAFT_KEY, value);
             renderCommandMemory(value);
+            renderLocalRouteHint(value);
             clearTimeout(previewTimer);
             if (value.trim().length >= 8) {
                 previewTimer = setTimeout(previewCurrentCommand, 650);
@@ -221,6 +223,7 @@ function setupEventListeners() {
             }
         });
         renderCommandMemory(commandText.value);
+        renderLocalRouteHint(commandText.value);
     }
 }
 
@@ -912,6 +915,7 @@ async function previewCurrentCommand() {
         renderPlanPreview(null);
         return;
     }
+    renderLocalRouteHint(text);
     if (!navigator.onLine) {
         renderPlanPreview({ status: 'offline', message: 'Offline. Plan preview needs the local PC server.' });
         return;
@@ -926,10 +930,53 @@ async function previewCurrentCommand() {
             body: JSON.stringify({ text, device_id: state.deviceId }),
         });
         const data = await response.json();
+        cacheRuntimeSnapshot(data);
         renderPlanPreview(data);
     } catch (error) {
         renderPlanPreview({ status: 'failed', message: error.message });
     }
+}
+
+async function renderLocalRouteHint(text) {
+    const clean = (text || '').trim();
+    if (!clean || clean.length < 3) return;
+    const hint = await postToWorker('MODEL_ROUTE_HINT', {
+        text: clean,
+        memory: loadCommandMemory(),
+    }, 650);
+    if (!hint) return;
+    renderPlanPreview({
+        status: 'local',
+        intent: 'typing',
+        risk_level: 0,
+        requires_approval: false,
+        step_count: 0,
+        message: 'Local phone memory is preparing the model route...',
+        model_plan: {
+            budget_mode: 'phone-preview',
+            model_budget_mb: 0,
+            recommended: hint.recommended,
+            lanes: hint.lanes,
+            prefetch: [],
+            teacher_fallback: {
+                enabled_by_default: false,
+                why: 'server decides teacher fallback after budget check',
+            },
+        },
+        memory_matches: hint.memory_matches,
+    });
+}
+
+function cacheRuntimeSnapshot(data) {
+    if (!data) return;
+    const snapshot = {
+        cached_at: Date.now(),
+        runtime: data.runtime || null,
+        ssd_tier: data.ssd_tier || null,
+        model_plan: data.model_plan || null,
+    };
+    localStorage.setItem(RUNTIME_SNAPSHOT_KEY, JSON.stringify(snapshot));
+    cacheForOffline(RUNTIME_SNAPSHOT_KEY, snapshot);
 }
 
 function renderPlanPreview(data) {
@@ -961,6 +1008,50 @@ function renderPlanPreview(data) {
         const pre = document.createElement('pre');
         pre.textContent = JSON.stringify(data.plan, null, 2);
         box.appendChild(pre);
+    }
+    if (data.model_plan) {
+        const plan = data.model_plan;
+        const modelBox = document.createElement('div');
+        modelBox.className = 'model-route';
+        appendText(modelBox, 'div', 'Model route', 'memory-title');
+        const chips = document.createElement('div');
+        chips.className = 'meta';
+        [
+            `budget: ${plan.budget_mode || 'auto'}`,
+            `model MB: ${plan.model_budget_mb || 0}`,
+            ...(plan.recommended || []).slice(0, 6).map(name => `model: ${name}`),
+        ].forEach(label => {
+            const chip = document.createElement('span');
+            chip.className = 'plan-chip';
+            chip.textContent = label;
+            chips.appendChild(chip);
+        });
+        modelBox.appendChild(chips);
+        (plan.lanes || []).forEach(lane => {
+            const row = document.createElement('div');
+            row.className = 'progress-step pending';
+            const laneModels = (lane.models || []).join(' + ');
+            row.textContent = `${lane.lane || 'lane'}: ${laneModels} (${lane.mode || 'auto'})`;
+            modelBox.appendChild(row);
+        });
+        if (plan.teacher_fallback) {
+            appendText(
+                modelBox,
+                'div',
+                `Teacher fallback: ${plan.teacher_fallback.enabled_by_default ? 'on' : 'off'} - ${plan.teacher_fallback.why || ''}`,
+                'empty-message'
+            );
+        }
+        box.appendChild(modelBox);
+    }
+    if (data.memory_matches?.length) {
+        const memoryBox = document.createElement('div');
+        memoryBox.className = 'command-memory';
+        appendText(memoryBox, 'div', 'Parallel memory matches', 'memory-title');
+        data.memory_matches.slice(0, 3).forEach(item => {
+            appendText(memoryBox, 'div', item.text || item.command || item.input_text || '', 'memory-item');
+        });
+        box.appendChild(memoryBox);
     }
     box.classList.remove('hidden');
 }

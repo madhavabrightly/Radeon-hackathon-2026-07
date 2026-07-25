@@ -83,6 +83,32 @@ User controls
 
 Do not make one messy AI process do everything. Separate responsibilities.
 
+## 2026-07-25 Model Routing Baseline
+
+The inspected model reports are now encoded in:
+
+```text
+ai_pc_operator/backend/app/runtime/model_insights.py
+ai_pc_operator/docs/MODEL_INSIGHTS.md
+```
+
+Use this policy for future work:
+
+- Qwen2.5 Coder 1.5B Q4 is the local reasoning/planning lane, loaded through llama.cpp with mmap only when RAM budget allows.
+- OCR det v3 and OCR rec English are the fast screen perception lane.
+- OmniParser v2 icon detect is a teacher/cloud or explicit fallback model, not a default 4GB resident model.
+- Browser and vault warmups are tiny dependency lanes, not LLM calls.
+- The phone UI can make instant JavaScript worker hints, but the backend remains the safe source of truth.
+
+For a 4GB no-GPU laptop, do not prefetch Qwen or OmniParser. Prefer:
+
+```text
+resident rules/native/UIA
+warm OCR only when needed
+SSD mmap Qwen only for complex/unknown commands
+teacher model only in cloud/distillation or explicit fallback
+```
+
 ## System Architecture
 
 ```text
