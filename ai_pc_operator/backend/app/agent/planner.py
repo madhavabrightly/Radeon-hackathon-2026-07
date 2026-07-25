@@ -255,9 +255,23 @@ class Planner:
 
     def _extract_app_name(self, text: str) -> str:
         """Extract application name from text."""
+        text_lower = text.lower()
+        known_phrases = [
+            "opera gx browser",
+            "opera gx",
+            "gx browser",
+            "google chrome",
+            "microsoft edge",
+            "visual studio code",
+            "vs code",
+        ]
+        for phrase in known_phrases:
+            if re.search(rf"\b{re.escape(phrase)}\b", text_lower):
+                return phrase
+
         # Remove common words
         text_clean = re.sub(
-            r"\b(open|launch|start|run|app|application|program)\b",
+            r"\b(open|launch|start|run|app|application|program|browser)\b",
             "",
             text,
             flags=re.IGNORECASE,

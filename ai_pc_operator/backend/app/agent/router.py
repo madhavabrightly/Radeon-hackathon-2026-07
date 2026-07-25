@@ -428,16 +428,23 @@ class AgentRouter:
             else:
                 result = await self.io_pool.run(method_func, **args)
 
+            tool_status = "success"
+            if isinstance(result, dict) and result.get("status") == "failed":
+                tool_status = "failed"
+
             # Log action
             await self._log_action(
-                command_id, tool_name, args, result, "success"
+                command_id, tool_name, args, result, tool_status
             )
 
-            return {
-                "status": "success",
+            response = {
+                "status": tool_status,
                 "tool": tool_name,
                 "result": result,
             }
+            if tool_status == "failed":
+                response["error"] = result.get("error", "Tool reported failure")
+            return response
 
         except Exception as e:
             logger.error(f"Tool execution failed: {e}", exc_info=True)
@@ -546,14 +553,29 @@ class AgentRouter:
         for r in results:
             if r["status"] == "success":
                 tool = r.get("tool", "unknown")
-                result = r.get("result", "")
+                result = self._human_tool_result(r.get("result", ""))
                 lines.append(f"✓ {tool}: {result}")
             else:
                 tool = r.get("tool", "unknown")
-                error = r.get("error", "Unknown error")
+                error = r.get("error")
+                if not error and isinstance(r.get("result"), dict):
+                    error = r["result"].get("error")
+                error = error or "Unknown error"
                 lines.append(f"✗ {tool}: {error}")
 
         return "\n".join(lines)
+
+    def _human_tool_result(self, result: Any) -> str:
+        """Prefer user-readable tool messages over raw dict payloads."""
+        if isinstance(result, dict):
+            for key in ("message", "summary", "page", "prepared"):
+                value = result.get(key)
+                if value:
+                    return str(value)
+            if result.get("status") == "success":
+                return "Done"
+            return str(self.redactor.redact_dict(result))
+        return str(result)
 
     async def emergency_stop(self) -> None:
         """Activate emergency stop."""

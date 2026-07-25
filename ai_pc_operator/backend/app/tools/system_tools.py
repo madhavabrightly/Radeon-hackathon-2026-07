@@ -11,6 +11,8 @@ import shlex
 import subprocess
 import shutil
 import time
+import os
+from pathlib import Path
 from typing import Dict, Any, List
 
 
@@ -21,6 +23,12 @@ class SystemTools:
         "chrome": "chrome",
         "edge": "msedge",
         "firefox": "firefox",
+        "opera": "opera",
+        "opera browser": "opera",
+        "opera gx": "opera-gx",
+        "opera gx browser": "opera-gx",
+        "gx": "opera-gx",
+        "gx browser": "opera-gx",
         "notepad": "notepad",
         "calculator": "calc",
         "calc": "calc",
@@ -29,9 +37,29 @@ class SystemTools:
         "cmd": "cmd",
         "powershell": "powershell",
         "terminal": "wt",
+        "visual studio code": "code",
+        "vs code": "code",
+        "vscode": "code",
         "excel": "excel",
         "word": "winword",
         "powerpoint": "powerpnt",
+    }
+
+    WINDOWS_APP_PATHS = {
+        "opera-gx": [
+            r"%LOCALAPPDATA%\Programs\Opera GX\launcher.exe",
+            r"%LOCALAPPDATA%\Programs\Opera GX\opera.exe",
+            r"%PROGRAMFILES%\Opera GX\launcher.exe",
+            r"%PROGRAMFILES%\Opera GX\opera.exe",
+            r"%PROGRAMFILES(X86)%\Opera GX\launcher.exe",
+            r"%PROGRAMFILES(X86)%\Opera GX\opera.exe",
+        ],
+        "opera": [
+            r"%LOCALAPPDATA%\Programs\Opera\launcher.exe",
+            r"%LOCALAPPDATA%\Programs\Opera\opera.exe",
+            r"%PROGRAMFILES%\Opera\launcher.exe",
+            r"%PROGRAMFILES%\Opera\opera.exe",
+        ],
     }
 
     async def status(self) -> Dict[str, Any]:
@@ -214,6 +242,12 @@ class SystemTools:
         found = shutil.which(alias)
         if found:
             return found
+        for candidate in self.WINDOWS_APP_PATHS.get(alias, []):
+            expanded = Path(os.path.expandvars(candidate))
+            if expanded.exists():
+                return str(expanded)
+        if alias in self.WINDOWS_APP_PATHS:
+            raise ValueError(f"Unknown or unavailable app: {name}")
         if alias in self.APP_ALIASES.values():
             return alias
         raise ValueError(f"Unknown or unavailable app: {name}")

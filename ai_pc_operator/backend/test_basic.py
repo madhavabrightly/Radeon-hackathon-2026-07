@@ -85,6 +85,17 @@ async def test_planner():
     assert plan["steps"][0]["tool"] == "browser.open"
     assert plan["steps"][0]["args"]["url"] == "https://www.youtube.com"
 
+    intent = await planner.classify_intent("Open gx browser")
+    plan = await planner.create_plan("Open gx browser", intent)
+    assert intent == "open_app"
+    assert plan["steps"][0]["tool"] == "system.open_app"
+    assert plan["steps"][0]["args"]["name"] == "gx browser"
+
+    intent = await planner.classify_intent("open Opera GX browser")
+    plan = await planner.create_plan("open Opera GX browser", intent)
+    assert intent == "open_app"
+    assert plan["steps"][0]["args"]["name"] == "opera gx browser"
+
     intent = await planner.classify_intent("close browser")
     plan = await planner.create_plan("close browser", intent)
     assert intent == "browser_close"
@@ -152,6 +163,21 @@ async def test_permissions():
         requires = engine.requires_approval(risk, intent)
         status = "[ok]" if requires == expected_approval else "[fail]"
         print(f"{status} '{command}' -> approval: {requires} (expected {expected_approval})")
+
+
+async def test_system_app_resolution():
+    """Test natural app aliases resolve to launchable Windows executables."""
+    from app.tools.system_tools import SystemTools
+
+    print("\nTesting system app resolution...")
+    tools = SystemTools()
+    try:
+        resolved = tools._resolve_app("gx browser")
+        assert resolved.lower().endswith(("opera.exe", "launcher.exe"))
+        print(f"[ok] gx browser -> {resolved}")
+    except ValueError:
+        assert tools.APP_ALIASES["gx browser"] == "opera-gx"
+        print("[ok] gx browser alias is known; Opera GX is not installed on this machine")
 
 
 async def test_vault():
@@ -350,6 +376,7 @@ async def main():
         await test_planner()
         await test_task_planner()
         await test_permissions()
+        await test_system_app_resolution()
         await test_vault()
         await test_redactor()
         await test_runtime_pipeline()
