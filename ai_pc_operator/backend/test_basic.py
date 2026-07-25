@@ -131,6 +131,31 @@ async def test_task_planner():
     assert "AMD ROCm" in payload["steps"][0]["args"]["query"]
     print("[ok] Research collect compound plan works")
 
+    plan = planner.plan(
+        "open gx browser and go to youtube.com and stay idle for 1 hour "
+        "use mouse movement"
+    )
+    assert plan
+    payload = plan.to_dict()
+    assert payload["intent"] == "browser_session"
+    assert payload["steps"][0]["tool"] == "system.open_app"
+    assert payload["steps"][0]["args"]["name"] == "gx browser"
+    assert payload["steps"][0]["args"]["target"] == "https://youtube.com"
+    assert payload["steps"][1]["tool"] == "system.keep_awake"
+    assert payload["steps"][1]["args"]["minutes"] == 60
+    assert payload["steps"][2]["tool"] == "system.mouse_jiggle"
+    print("[ok] Browser session + idle + mouse movement plan works")
+
+    plan = planner.plan("open browser and go to github.com and stay idle for 30 minutes")
+    assert plan
+    payload = plan.to_dict()
+    assert payload["intent"] == "browser_session"
+    assert payload["steps"][0]["tool"] == "browser.open"
+    assert payload["steps"][0]["args"]["url"] == "https://github.com"
+    assert payload["steps"][1]["tool"] == "system.keep_awake"
+    assert payload["steps"][1]["args"]["minutes"] == 30
+    print("[ok] Generic browser session plan works")
+
     plan = planner.plan("open settings and turn contrast to 30 percent")
     assert plan
     assert plan.to_dict()["steps"][0]["tool"] == "system.open_settings"

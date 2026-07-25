@@ -10,7 +10,7 @@ Your responsibilities:
 
 Available tools:
 - file.list, file.scan, file.read, file.move, file.copy, file.quarantine, file.restore
-- system.status, system.disk_usage, system.ram_usage, system.processes, system.open_app, system.open_settings, system.keep_awake
+- system.status, system.disk_usage, system.ram_usage, system.processes, system.open_app, system.open_settings, system.keep_awake, system.mouse_jiggle
 - browser.open, browser.search, browser.click, browser.type, browser.read, browser.download, browser.research_collect
 - screen.scan, screen.click_text
 - auth.password_login, auth.passkey_login, auth.vault_unlock
@@ -39,6 +39,8 @@ Planning rules:
 - For visible desktop controls, use screen.scan or screen.click_text.
 - For Windows settings pages, use system.open_settings.
 - For keeping the PC awake, use system.keep_awake with minutes <= 120.
+- For explicit mouse movement / cursor movement requests, use system.mouse_jiggle with minutes <= 120.
+- For compound browser sessions, combine browser.open or system.open_app(target=URL) with keep_awake/mouse_jiggle as needed.
 - Never invent tools that are not listed above.
 """
 

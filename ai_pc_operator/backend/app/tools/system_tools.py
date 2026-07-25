@@ -5,6 +5,7 @@ from __future__ import annotations
 import psutil
 import asyncio
 import ctypes
+import ctypes.wintypes
 import platform
 import re
 import shlex
@@ -131,14 +132,17 @@ class SystemTools:
         )
         return procs[:limit]
 
-    async def open_app(self, name: str) -> Dict[str, Any]:
+    async def open_app(self, name: str, target: str | None = None) -> Dict[str, Any]:
         """Open an application."""
         try:
             executable = self._resolve_app(name)
-            subprocess.Popen([executable])
+            args = [executable]
+            if target:
+                args.append(target)
+            subprocess.Popen(args)
             return {
                 "status": "success",
-                "message": f"Opened {executable}",
+                "message": f"Opened {executable}" + (f" with {target}" if target else ""),
             }
         except Exception as e:
             return {
@@ -206,6 +210,40 @@ class SystemTools:
             "status": "success",
             "minutes": minutes,
             "method": "SetThreadExecutionState",
+        }
+
+    async def mouse_jiggle(
+        self,
+        minutes: int = 60,
+        interval_seconds: int = 45,
+    ) -> Dict[str, Any]:
+        """Move the mouse slightly for a bounded duration when explicitly asked."""
+        minutes = max(1, min(int(minutes), 120))
+        interval_seconds = max(10, min(int(interval_seconds), 300))
+        if platform.system().lower() != "windows":
+            return {
+                "status": "failed",
+                "error": "mouse_jiggle is currently implemented for Windows only",
+            }
+
+        async def jiggle() -> None:
+            point = ctypes.wintypes.POINT()
+            end_at = time.monotonic() + (minutes * 60)
+            direction = 1
+            while time.monotonic() < end_at:
+                ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+                ctypes.windll.user32.SetCursorPos(point.x + direction, point.y)
+                await asyncio.sleep(0.05)
+                ctypes.windll.user32.SetCursorPos(point.x, point.y)
+                direction *= -1
+                await asyncio.sleep(interval_seconds)
+
+        asyncio.create_task(jiggle())
+        return {
+            "status": "success",
+            "minutes": minutes,
+            "interval_seconds": interval_seconds,
+            "message": f"Mouse movement scheduled for {minutes} minute(s)",
         }
 
     async def run_command(self, command: str) -> Dict[str, Any]:
