@@ -76,7 +76,7 @@ class Planner:
             ],
             "open_app": [
                 r"\b(open|launch|start|run)\b.*\b(app|application|program)\b",
-                r"\bopen\b\s+\w+",
+                r"\b(open|launch|start|run)\b\s+\w+",
             ],
             "download_file": [
                 r"\b(download|get|fetch)\b.*\b(file|program|app)\b",
@@ -271,15 +271,27 @@ class Planner:
 
         # Remove common words
         text_clean = re.sub(
-            r"\b(open|launch|start|run|app|application|program|browser)\b",
+            r"^\s*(open|launch|start|run)\b",
             "",
             text,
             flags=re.IGNORECASE,
         ).strip()
+        text_clean = re.split(
+            r"\b(and|then|after that|go to|search|stay|keep|for)\b",
+            text_clean,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+        text_clean = re.sub(
+            r"\b(app|application|program)\b",
+            " ",
+            text_clean,
+            flags=re.IGNORECASE,
+        )
+        text_clean = re.sub(r"\s+", " ", text_clean).strip(" .,:;\"'")
 
-        # Take first word/phrase
         words = text_clean.split()
-        return words[0] if words else "unknown"
+        return " ".join(words[:4]) if words else "unknown"
 
     def _extract_url(self, text: str) -> str:
         """Extract URL from text."""

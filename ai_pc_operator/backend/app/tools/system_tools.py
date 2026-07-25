@@ -6,6 +6,8 @@ import psutil
 import asyncio
 import ctypes
 import ctypes.wintypes
+import difflib
+import json
 import platform
 import re
 import shlex
@@ -22,7 +24,9 @@ class SystemTools:
 
     APP_ALIASES = {
         "chrome": "chrome",
+        "google chrome": "chrome",
         "edge": "msedge",
+        "microsoft edge": "msedge",
         "firefox": "firefox",
         "opera": "opera",
         "opera browser": "opera",
@@ -30,6 +34,12 @@ class SystemTools:
         "opera gx browser": "opera-gx",
         "gx": "opera-gx",
         "gx browser": "opera-gx",
+        "camera": "camera",
+        "windows camera": "camera",
+        "nexa": "nexa",
+        "nexa app": "nexa",
+        "snakelite": "snakelite",
+        "snake lite": "snakelite",
         "notepad": "notepad",
         "calculator": "calc",
         "calc": "calc",
@@ -44,6 +54,10 @@ class SystemTools:
         "excel": "excel",
         "word": "winword",
         "powerpoint": "powerpnt",
+    }
+
+    WINDOWS_URI_APPS = {
+        "camera": "microsoft.windows.camera:",
     }
 
     WINDOWS_APP_PATHS = {
@@ -62,6 +76,29 @@ class SystemTools:
             r"%PROGRAMFILES%\Opera\opera.exe",
         ],
     }
+
+    COMMON_SEARCH_DIRS = [
+        r"%APPDATA%\Microsoft\Windows\Start Menu\Programs",
+        r"%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs",
+        r"%USERPROFILE%\Desktop",
+        r"%PUBLIC%\Desktop",
+        r"%LOCALAPPDATA%\Programs",
+        r"%PROGRAMFILES%",
+        r"%PROGRAMFILES(X86)%",
+    ]
+
+    APP_MATCH_STOPWORDS = {
+        "app",
+        "application",
+        "program",
+        "browser",
+        "desktop",
+        "windows",
+    }
+
+    _app_index_cache: list[dict[str, Any]] | None = None
+    _app_index_cache_time: float = 0.0
+    _app_index_ttl_seconds = 300.0
 
     async def status(self) -> Dict[str, Any]:
         """Get system status."""
@@ -135,14 +172,18 @@ class SystemTools:
     async def open_app(self, name: str, target: str | None = None) -> Dict[str, Any]:
         """Open an application."""
         try:
-            executable = self._resolve_app(name)
-            args = [executable]
-            if target:
-                args.append(target)
-            subprocess.Popen(args)
+            match = self._resolve_app_match(name)
+            self._launch_app_match(match, target)
             return {
                 "status": "success",
-                "message": f"Opened {executable}" + (f" with {target}" if target else ""),
+                "message": f"Opened {match['display_name']}" + (f" with {target}" if target else ""),
+                "resolved": {
+                    "query": name,
+                    "display_name": match["display_name"],
+                    "launch_type": match["launch_type"],
+                    "confidence": match["confidence"],
+                    "source": match["source"],
+                },
             }
         except Exception as e:
             return {
@@ -272,20 +313,239 @@ class SystemTools:
 
     def _resolve_app(self, name: str) -> str:
         """Resolve a natural app name to a safe executable name."""
+        return self._resolve_app_match(name)["launch_value"]
+
+    def _resolve_app_match(self, name: str) -> dict[str, Any]:
+        """Resolve a natural app name to a launchable app match."""
         cleaned = re.sub(r"[^a-zA-Z0-9_. -]", "", name).strip().lower()
         if not cleaned:
             raise ValueError("App name is empty after sanitization")
 
         alias = self.APP_ALIASES.get(cleaned, cleaned.split()[0])
+
         found = shutil.which(alias)
         if found:
-            return found
+            return self._app_match(
+                display_name=cleaned,
+                launch_type="exe",
+                launch_value=found,
+                confidence=1.0,
+                source="path",
+            )
+
         for candidate in self.WINDOWS_APP_PATHS.get(alias, []):
             expanded = Path(os.path.expandvars(candidate))
             if expanded.exists():
-                return str(expanded)
-        if alias in self.WINDOWS_APP_PATHS:
-            raise ValueError(f"Unknown or unavailable app: {name}")
+                return self._app_match(
+                    display_name=cleaned,
+                    launch_type="exe",
+                    launch_value=str(expanded),
+                    confidence=1.0,
+                    source="known-path",
+                )
+
+        if alias in self.WINDOWS_URI_APPS:
+            return self._app_match(
+                display_name=cleaned,
+                launch_type="uri",
+                launch_value=self.WINDOWS_URI_APPS[alias],
+                confidence=1.0,
+                source="windows-uri",
+            )
+
+        discovered = self._best_discovered_app_match(cleaned, alias)
+        if discovered:
+            return discovered
+
         if alias in self.APP_ALIASES.values():
-            return alias
+            found = shutil.which(alias)
+            if found:
+                return self._app_match(cleaned, "exe", found, 0.95, "path")
+
         raise ValueError(f"Unknown or unavailable app: {name}")
+
+    def _launch_app_match(self, match: dict[str, Any], target: str | None = None) -> None:
+        """Launch a resolved app match with the safest available method."""
+        launch_type = match["launch_type"]
+        launch_value = match["launch_value"]
+        if launch_type == "uri":
+            os.startfile(launch_value)  # type: ignore[attr-defined]
+            return
+        if launch_type == "appx":
+            subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{launch_value}"])
+            return
+        if launch_type in {"shortcut", "url"}:
+            os.startfile(launch_value)  # type: ignore[attr-defined]
+            return
+        args = [launch_value]
+        if target:
+            args.append(target)
+        subprocess.Popen(args)
+
+    def _best_discovered_app_match(self, cleaned: str, alias: str) -> dict[str, Any] | None:
+        queries = {cleaned, alias, self._normalize_app_name(cleaned), self._normalize_app_name(alias)}
+        queries = {query for query in queries if query}
+        candidates = self._discover_apps()
+        best: dict[str, Any] | None = None
+        best_score = 0.0
+
+        for candidate in candidates:
+            names = {
+                candidate["name"],
+                candidate["normalized_name"],
+                candidate["stem"],
+                candidate["normalized_stem"],
+            }
+            score = max(self._score_app_match(query, option) for query in queries for option in names)
+            if score > best_score:
+                best = candidate
+                best_score = score
+
+        if not best or best_score < 0.72:
+            return None
+
+        return self._app_match(
+            display_name=best["display_name"],
+            launch_type=best["launch_type"],
+            launch_value=best["launch_value"],
+            confidence=round(best_score, 3),
+            source=best["source"],
+        )
+
+    def _discover_apps(self) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        if (
+            self._app_index_cache is not None
+            and now - self._app_index_cache_time < self._app_index_ttl_seconds
+        ):
+            return self._app_index_cache
+
+        candidates: list[dict[str, Any]] = []
+        candidates.extend(self._discover_shortcuts())
+        candidates.extend(self._discover_appx())
+        self._app_index_cache = candidates
+        self._app_index_cache_time = now
+        return candidates
+
+    def _discover_shortcuts(self) -> list[dict[str, Any]]:
+        apps: list[dict[str, Any]] = []
+        suffixes = {".lnk": "shortcut", ".appref-ms": "shortcut", ".url": "url", ".exe": "exe"}
+        for raw_dir in self.COMMON_SEARCH_DIRS:
+            root = Path(os.path.expandvars(raw_dir))
+            if not root.exists():
+                continue
+            for path in self._iter_app_paths(root, suffixes):
+                stem = path.stem
+                apps.append(
+                    {
+                        "display_name": stem,
+                        "name": stem.lower(),
+                        "normalized_name": self._normalize_app_name(stem),
+                        "stem": stem.lower(),
+                        "normalized_stem": self._normalize_app_name(stem),
+                        "launch_type": suffixes[path.suffix.lower()],
+                        "launch_value": str(path),
+                        "source": "start-menu" if "start menu" in str(root).lower() else "filesystem",
+                    }
+                )
+        return apps
+
+    def _iter_app_paths(self, root: Path, suffixes: set[str]) -> list[Path]:
+        found: list[Path] = []
+        try:
+            for path in root.rglob("*"):
+                if len(found) >= 600:
+                    break
+                if path.is_file() and path.suffix.lower() in suffixes:
+                    found.append(path)
+        except (OSError, PermissionError):
+            pass
+        return found
+
+    def _discover_appx(self) -> list[dict[str, Any]]:
+        if platform.system().lower() != "windows":
+            return []
+        try:
+            output = subprocess.check_output(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    "Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress",
+                ],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=4,
+            ).strip()
+        except Exception:
+            return []
+        if not output:
+            return []
+        try:
+            parsed = json.loads(output)
+        except json.JSONDecodeError:
+            return []
+        rows = parsed if isinstance(parsed, list) else [parsed]
+        apps: list[dict[str, Any]] = []
+        for row in rows:
+            name = str(row.get("Name", "")).strip()
+            app_id = str(row.get("AppID", "")).strip()
+            if not name or not app_id:
+                continue
+            apps.append(
+                {
+                    "display_name": name,
+                    "name": name.lower(),
+                    "normalized_name": self._normalize_app_name(name),
+                    "stem": name.lower(),
+                    "normalized_stem": self._normalize_app_name(name),
+                    "launch_type": "appx",
+                    "launch_value": app_id,
+                    "source": "start-apps",
+                }
+            )
+        return apps
+
+    def _score_app_match(self, query: str, option: str) -> float:
+        query = self._normalize_app_name(query)
+        option = self._normalize_app_name(option)
+        if not query or not option:
+            return 0.0
+        if query == option:
+            return 1.0
+        if query in option:
+            return 0.92 if len(query) >= 3 else 0.82
+        query_tokens = set(query.split())
+        option_tokens = set(option.split())
+        if query_tokens and query_tokens.issubset(option_tokens):
+            return 0.9
+        overlap = len(query_tokens & option_tokens) / max(1, len(query_tokens | option_tokens))
+        ratio = difflib.SequenceMatcher(None, query, option).ratio()
+        return max(ratio, overlap)
+
+    def _normalize_app_name(self, value: str) -> str:
+        cleaned = re.sub(r"[^a-zA-Z0-9]+", " ", value).lower()
+        tokens = [
+            token
+            for token in cleaned.split()
+            if token and token not in self.APP_MATCH_STOPWORDS
+        ]
+        return " ".join(tokens)
+
+    def _app_match(
+        self,
+        display_name: str,
+        launch_type: str,
+        launch_value: str,
+        confidence: float,
+        source: str,
+    ) -> dict[str, Any]:
+        return {
+            "display_name": display_name,
+            "launch_type": launch_type,
+            "launch_value": launch_value,
+            "confidence": confidence,
+            "source": source,
+        }

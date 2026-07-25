@@ -193,6 +193,7 @@ async def test_permissions():
 async def test_system_app_resolution():
     """Test natural app aliases resolve to launchable Windows executables."""
     from app.tools.system_tools import SystemTools
+    import tempfile
 
     print("\nTesting system app resolution...")
     tools = SystemTools()
@@ -203,6 +204,30 @@ async def test_system_app_resolution():
     except ValueError:
         assert tools.APP_ALIASES["gx browser"] == "opera-gx"
         print("[ok] gx browser alias is known; Opera GX is not installed on this machine")
+
+    camera = tools._resolve_app_match("camera")
+    assert camera["launch_type"] == "uri"
+    assert camera["launch_value"] == "microsoft.windows.camera:"
+    print("[ok] camera -> Windows Camera URI")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        shortcut = Path(tmpdir) / "Snake Lite.lnk"
+        shortcut.write_text("", encoding="utf-8")
+        original_dirs = tools.COMMON_SEARCH_DIRS
+        original_cache = tools._app_index_cache
+        original_cache_time = tools._app_index_cache_time
+        try:
+            tools.COMMON_SEARCH_DIRS = [tmpdir]
+            tools._app_index_cache = None
+            tools._app_index_cache_time = 0.0
+            match = tools._resolve_app_match("snakelite")
+            assert match["display_name"] == "Snake Lite"
+            assert match["launch_type"] == "shortcut"
+            print("[ok] snakelite fuzzy matched Snake Lite shortcut")
+        finally:
+            tools.COMMON_SEARCH_DIRS = original_dirs
+            tools._app_index_cache = original_cache
+            tools._app_index_cache_time = original_cache_time
 
 
 async def test_vault():
