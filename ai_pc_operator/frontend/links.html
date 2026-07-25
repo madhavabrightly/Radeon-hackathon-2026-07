@@ -140,6 +140,26 @@
                     <a id="current-remote-open" class="secondary-btn small-btn" href="#">Current Host</a>
                 </div>
             </article>
+
+            <article class="link-card">
+                <h2>PC Model Lab</h2>
+                <p>Open this on the PC browser to test command understanding and model routing.</p>
+                <a id="lab-link" class="link-box" href="lab.html">lab.html</a>
+                <div class="link-actions">
+                    <button class="primary-btn small-btn" data-copy="lab-link">Copy</button>
+                    <a id="lab-open" class="secondary-btn small-btn" href="lab.html">Open</a>
+                </div>
+            </article>
+
+            <article class="link-card">
+                <h2>Desktop Pet</h2>
+                <p>Start the tiny PC pet. It previews plans locally and never executes commands.</p>
+                <span id="pet-command" class="link-box">start_pet.bat</span>
+                <div class="link-actions">
+                    <button class="primary-btn small-btn" data-copy="pet-command">Copy</button>
+                    <a id="pet-open" class="secondary-btn small-btn" href="../start_pet.bat">Open BAT</a>
+                </div>
+            </article>
         </section>
 
         <p id="startup-note" class="link-note"></p>
@@ -167,6 +187,8 @@
             'phone-link': startup?.http?.phoneRemote || `${httpOrigin}/remote/index.html`,
             'https-pc-link': startup?.https?.pcPair || `${currentHttpsOrigin}/remote/pair.html`,
             'lan-template': startup?.https?.phoneRemote || `https://${startupIp}:8443/remote/index.html`,
+            'lab-link': startup?.http?.lab || `${httpOrigin}/remote/lab.html`,
+            'pet-command': 'ai_pc_operator\\start_pet.bat',
         };
 
         for (const [id, url] of Object.entries(links)) {
@@ -178,6 +200,8 @@
 
         document.getElementById('https-pc-open').href = links['https-pc-link'];
         document.getElementById('current-remote-open').href = links['lan-template'];
+        document.getElementById('lab-open').href = links['lab-link'];
+        document.getElementById('pet-open').href = isFilePage ? '../start_pet.bat' : '#';
 
         const subtitle = document.getElementById('links-subtitle');
         const startupNote = document.getElementById('startup-note');

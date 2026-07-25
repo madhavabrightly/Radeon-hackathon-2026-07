@@ -6,7 +6,7 @@
  * Commands are saved as drafts only; they are never replayed automatically.
  * ================================================================ */
 
-const CACHE_VERSION = 'screenai-v2-whatsapp-ui';
+const CACHE_VERSION = 'screenai-v3-lab-pet';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 const OFFLINE_URL = '/remote/offline.html';
@@ -17,6 +17,7 @@ const STATIC_ASSETS = [
   '/remote/app.js',
   '/remote/manifest.json',
   '/remote/login.html',
+  '/remote/lab.html',
   '/remote/links.html',
   '/remote/pair.html',
   '/remote/sw.js',

@@ -55,6 +55,7 @@ REM Refresh file:// links page data. links.html reads this even when opened dire
     echo     root: "http://localhost:8000",
     echo     pcPair: "http://localhost:8000/remote/pair.html",
     echo     phoneRemote: "http://%IP%:8000/remote/index.html",
+    echo     lab: "http://localhost:8000/remote/lab.html",
     echo     links: "http://localhost:8000/remote/links.html",
     echo     runtime: "http://localhost:8000/runtime"
     echo   },
@@ -62,6 +63,7 @@ REM Refresh file:// links page data. links.html reads this even when opened dire
     echo     root: "https://localhost:8443",
     echo     pcPair: "https://localhost:8443/remote/pair.html",
     echo     phoneRemote: "https://%IP%:8443/remote/index.html",
+    echo     lab: "https://localhost:8443/remote/lab.html",
     echo     links: "https://localhost:8443/remote/links.html",
     echo     runtime: "https://localhost:8443/runtime"
     echo   }
@@ -80,12 +82,14 @@ echo HTTP server starting on port 8000:
 echo   PC home:          http://localhost:8000
 echo   PC pairing page:  http://localhost:8000/remote/pair.html
 echo   PC links page:    http://localhost:8000/remote/links.html
+echo   PC model lab:     http://localhost:8000/remote/lab.html
 echo   Phone remote:     http://%IP%:8000/remote/index.html
 echo   Runtime status:   http://localhost:8000/runtime
 echo.
 echo HTTPS links for phone camera/QR scanner:
 echo   PC pairing page:  https://localhost:8443/remote/pair.html
 echo   PC links page:    https://localhost:8443/remote/links.html
+echo   PC model lab:     https://localhost:8443/remote/lab.html
 echo   Phone remote:     https://%IP%:8443/remote/index.html
 echo.
 echo To start HTTPS instead, run:
@@ -93,6 +97,9 @@ echo   cd /d "%~dp0backend"
 echo   python scripts\start_https.py
 echo.
 echo Network profile: %NETWORK_PROFILE%
+echo Desktop pet:
+echo   "%~dp0start_pet.bat"
+echo.
 echo If the phone URL does not open, run this once:
 echo   "%~dp0setup_firewall.bat"
 echo Then make sure phone and PC are on the same Wi-Fi.

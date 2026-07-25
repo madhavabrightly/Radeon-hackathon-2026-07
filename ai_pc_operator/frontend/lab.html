@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Screen-AI Model Lab</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        body {
+            min-height: 100vh;
+            background: #0b141a;
+            color: #e9edef;
+        }
+
+        .lab {
+            width: min(980px, 100%);
+            margin: 0 auto;
+            padding: 18px;
+        }
+
+        .lab-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 0 18px;
+        }
+
+        .lab-title h1 {
+            font-size: 1.8em;
+            margin-bottom: 6px;
+            background: none;
+            color: #e9edef;
+            -webkit-text-fill-color: currentColor;
+        }
+
+        .lab-title p {
+            color: #8696a0;
+            line-height: 1.5;
+        }
+
+        .lab-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr);
+            gap: 14px;
+        }
+
+        .lab-panel {
+            background: #202c33;
+            border: 1px solid rgba(134, 150, 160, 0.16);
+            border-radius: 8px;
+            padding: 14px;
+        }
+
+        .lab-chat {
+            min-height: 460px;
+            display: grid;
+            grid-template-rows: 1fr auto;
+            background: #0b141a;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid rgba(134, 150, 160, 0.16);
+        }
+
+        #lab-thread {
+            padding: 14px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .lab-composer {
+            background: #202c33;
+            padding: 10px;
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            gap: 8px;
+        }
+
+        #lab-input {
+            min-height: 48px;
+            max-height: 140px;
+            resize: vertical;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            background: #2a3942;
+            color: #e9edef;
+            padding: 10px;
+            font: inherit;
+        }
+
+        #lab-input:focus {
+            outline: none;
+            border-color: #00a884;
+        }
+
+        .lab-button {
+            border: none;
+            border-radius: 8px;
+            padding: 0 14px;
+            background: #00a884;
+            color: #06261f;
+            font-weight: 800;
+            cursor: pointer;
+        }
+
+        .lab-button.secondary {
+            background: #111b21;
+            color: #d1d7db;
+            border: 1px solid rgba(134, 150, 160, 0.18);
+        }
+
+        .lab-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 10px 0;
+        }
+
+        .lab-chip {
+            border-radius: 999px;
+            background: #111b21;
+            border: 1px solid rgba(134, 150, 160, 0.18);
+            padding: 5px 9px;
+            color: #d1d7db;
+            font-size: 0.82em;
+        }
+
+        .lab-pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: #111b21;
+            border-radius: 8px;
+            padding: 12px;
+            color: #d1d7db;
+            font-size: 0.86em;
+            max-height: 360px;
+            overflow: auto;
+        }
+
+        @media (max-width: 820px) {
+            .lab-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .lab-composer {
+                grid-template-columns: 1fr;
+            }
+
+            .lab-button {
+                min-height: 42px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="lab">
+        <header class="lab-header">
+            <div class="lab-title">
+                <h1>Screen-AI Model Lab</h1>
+                <p>PC browser test page for command understanding, model routing, and safe plan previews.</p>
+            </div>
+            <a class="lab-button secondary" href="/remote/links.html" style="text-decoration:none;display:grid;place-items:center;min-height:40px;">Links</a>
+        </header>
+
+        <section class="lab-grid">
+            <div class="lab-chat">
+                <div id="lab-thread">
+                    <div class="message-row incoming">
+                        <div class="message-bubble">
+                            <div class="message-text">Type a command and press Preview. I will show how the local backend understands it before anything runs.</div>
+                            <div class="message-time">Model Lab</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="lab-composer">
+                    <textarea id="lab-input">open gx browser and go to youtube.com and stay idle for 1 hour use mouse movement</textarea>
+                    <button id="preview-btn" class="lab-button">Preview</button>
+                    <button id="clear-btn" class="lab-button secondary">Clear</button>
+                </div>
+            </div>
+
+            <aside class="lab-panel">
+                <h2 style="font-size:1em;margin-bottom:8px;">Latest Plan</h2>
+                <div id="lab-meta" class="lab-meta"></div>
+                <pre id="lab-json" class="lab-pre">No preview yet.</pre>
+            </aside>
+        </section>
+    </main>
+
+    <script>
+        const thread = document.getElementById('lab-thread');
+        const input = document.getElementById('lab-input');
+        const meta = document.getElementById('lab-meta');
+        const jsonBox = document.getElementById('lab-json');
+
+        document.getElementById('preview-btn').addEventListener('click', preview);
+        document.getElementById('clear-btn').addEventListener('click', () => {
+            input.value = '';
+            meta.replaceChildren();
+            jsonBox.textContent = 'No preview yet.';
+        });
+
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                preview();
+            }
+        });
+
+        async function preview() {
+            const text = input.value.trim();
+            if (!text) return;
+            addMessage('outgoing', text);
+            const thinking = addMessage('incoming', 'Planning...');
+            try {
+                const response = await fetch('/command/preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text}),
+                });
+                const data = await response.json();
+                renderPlan(data);
+                thinking.querySelector('.message-text').textContent = summarize(data);
+            } catch (error) {
+                thinking.querySelector('.message-text').textContent = `Preview failed: ${error.message}`;
+            }
+            thread.scrollTop = thread.scrollHeight;
+        }
+
+        function addMessage(direction, text) {
+            const row = document.createElement('div');
+            row.className = `message-row ${direction === 'outgoing' ? 'outgoing' : 'incoming'}`;
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+            const msg = document.createElement('div');
+            msg.className = 'message-text';
+            msg.textContent = text;
+            const time = document.createElement('div');
+            time.className = 'message-time';
+            time.textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+            bubble.append(msg, time);
+            row.appendChild(bubble);
+            thread.appendChild(row);
+            thread.scrollTop = thread.scrollHeight;
+            return row;
+        }
+
+        function renderPlan(data) {
+            meta.replaceChildren();
+            [
+                `intent: ${data.intent || data.status}`,
+                `risk: ${data.risk_level ?? '-'}`,
+                `steps: ${data.step_count ?? 0}`,
+                `budget: ${data.model_plan?.budget_mode || data.runtime?.budget_mode || '-'}`,
+            ].forEach((label) => {
+                const chip = document.createElement('span');
+                chip.className = 'lab-chip';
+                chip.textContent = label;
+                meta.appendChild(chip);
+            });
+            jsonBox.textContent = JSON.stringify({
+                status: data.status,
+                intent: data.intent,
+                risk_level: data.risk_level,
+                requires_approval: data.requires_approval,
+                plan: data.plan,
+                model_plan: data.model_plan,
+            }, null, 2);
+        }
+
+        function summarize(data) {
+            const steps = data.plan?.steps || [];
+            const stepText = steps.map((step, idx) => `${idx + 1}. ${step.tool}`).join('\n');
+            return `Intent: ${data.intent}\nRisk: ${data.risk_level}\n${stepText || data.message || 'No plan yet.'}`;
+        }
+    </script>
+</body>
+</html>
