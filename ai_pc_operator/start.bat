@@ -43,6 +43,8 @@ for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
 set "FRONTEND_DIR=%~dp0frontend"
 set "LOCAL_LINKS_FILE=%FRONTEND_DIR%\links.html"
 set "RUNTIME_LINKS_JS=%FRONTEND_DIR%\links.runtime.js"
+set "NETWORK_PROFILE=Unknown"
+for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1; if ($cfg) { $profile = Get-NetConnectionProfile -InterfaceIndex $cfg.InterfaceIndex -ErrorAction SilentlyContinue; if ($profile) { $profile.NetworkCategory } else { 'Unknown' } } else { 'Unknown' }"`) do set "NETWORK_PROFILE=%%p"
 
 REM Refresh file:// links page data. links.html reads this even when opened directly.
 (
@@ -89,6 +91,11 @@ echo.
 echo To start HTTPS instead, run:
 echo   cd /d "%~dp0backend"
 echo   python scripts\start_https.py
+echo.
+echo Network profile: %NETWORK_PROFILE%
+echo If the phone URL does not open, run this once:
+echo   "%~dp0setup_firewall.bat"
+echo Then make sure phone and PC are on the same Wi-Fi.
 echo.
 echo Pairing code will appear below.
 echo Open the phone remote URL on your phone.
