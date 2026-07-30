@@ -818,4 +818,69 @@ main.py ────────→ commands, approvals (status endpoints)
 
 ---
 
-*This document maps the complete Screen-AI codebase as of the latest session. Update when new modules are added.*
+## 18. Node.js Pipeline System (`pipeline/`)
+
+> A pure-JavaScript, zero-dependency pipeline framework for project automation.
+
+### Architecture
+
+```
+pipeline/
+├── operations.js          — 20 composable operations (mkdir, writeFile, readFile, copyFile,
+│                            moveFile, deleteFile, deleteDir, listDir, glob, appendFile,
+│                            template, connect, exec, batch, condition, variable, sleep, chain)
+├── engine.js              — Pipeline runner (sequence, middleware, events, dry-run, error handling)
+│                            PipelineRegistry for multi-pipeline orchestration
+│                            4 built-in middleware: logging, requireVars, tolerateErrors, metrics
+├── screenai_pipelines.js  — 9 pre-built pipelines for Screen-AI project tasks
+├── cli.js                 — CLI interface (list, describe, run, run-all, --dry-run)
+├── test_pipeline.js       — 43 tests covering all operations, engine, and integration
+└── package.json           — npm scripts for all pipelines
+```
+
+### Pipeline Registry
+
+| Pipeline | Steps | Purpose |
+|----------|-------|---------|
+| `scaffold-full` | 7 | Create entire project folder structure with __init__.py, .gitignore, package.json |
+| `build-frontend` | 6 | Copy and bundle all frontend assets to dist/ |
+| `build-native` | 4 | Compile C core library for Windows/Linux/Mac |
+| `clean` | 6 | Remove __pycache__, .pytest_cache, caches, dist/, node_modules/ |
+| `init-new-module` | 4 | Create new tool module with boilerplate (use --name) |
+| `generate-docs` | 4 | Scan codebase and generate API_REFERENCE.md + MODULE_MAP.md |
+| `backup-database` | 2 | Snapshot SQLite database to data/backups/ |
+| `connect-all` | 7 | Scan all files and generate relation-map.md |
+| `deploy-package` | 5 | Package everything into dist/ for distribution |
+| `batch-convert` | 3 | Convert/copy files between directories |
+
+### Operations Library
+
+**File Ops**: mkdir, writeFile, readFile, copyFile, moveFile, deleteFile, deleteDir, listDir, glob, appendFile  
+**Content Ops**: template ({{var}} syntax), connect (read→transform→write), exec (shell)  
+**Control Flow**: batch (loop over list), condition (if/else), variable (set), sleep, chain (sub-pipeline)
+
+### Usage
+
+```bash
+node pipeline/cli.js list                          # List all pipelines
+node pipeline/cli.js describe                      # Describe all pipelines
+node pipeline/cli.js run scaffold-full             # Run scaffold
+node pipeline/cli.js run clean --dry-run           # Dry run clean
+node pipeline/cli.js run init-new-module --name my_tool  # Create new module
+node pipeline/cli.js run-all                       # Run all pipelines in sequence
+npm run pipeline:connect                           # Via npm scripts
+```
+
+### Engine Features
+
+- **Chainable API**: `pipe.step('name', op, vars).step(...)`
+- **Middleware**: Wrap every step (logging, validation, error tolerance, metrics)
+- **Events**: `pipeline:start`, `step:start`, `step:complete`, `step:error`, `pipeline:complete`
+- **Dry-run mode**: Preview all operations without modifying filesystem
+- **Error handling**: Stop on error (default) or continue via onError handler
+- **PipelineRegistry**: Register, look up, and orchestrate multiple pipelines
+- **Step-specific vars**: Each step gets its own variable scope
+
+---
+
+*This document maps the complete Screen-AI codebase. Updated to include the Node.js pipeline system. Update when new modules are added.*

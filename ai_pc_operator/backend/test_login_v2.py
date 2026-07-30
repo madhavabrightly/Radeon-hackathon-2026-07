@@ -2,11 +2,17 @@
 
 import asyncio
 import base64
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent))
+os.environ.setdefault(
+    "SCREEN_AI_DB_PATH",
+    str(Path(tempfile.gettempdir()) / "screen_ai_test_login_v2.db"),
+)
 
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives import serialization
@@ -15,7 +21,7 @@ from app.db.database import init_db, close_db
 from app.security.pairing_v2 import PairingManagerV2
 
 
-async def test_pairing_v2():
+async def _run_pairing_v2():
     """Test the new pairing manager."""
     print("=" * 60)
     print("Testing PairingManagerV2")
@@ -111,8 +117,16 @@ async def test_pairing_v2():
     print("=" * 60)
 
 
+def test_pairing_v2():
+    """Pytest entry point for the async pairing flow."""
+    try:
+        asyncio.run(_run_pairing_v2())
+    finally:
+        asyncio.run(close_db())
+
+
 if __name__ == "__main__":
     try:
-        asyncio.run(test_pairing_v2())
+        asyncio.run(_run_pairing_v2())
     finally:
         asyncio.run(close_db())

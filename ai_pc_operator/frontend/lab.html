@@ -26,6 +26,14 @@
             padding: 14px 0 18px;
         }
 
+        .lab-actions {
+            display: flex;
+            align-items: stretch;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
         .lab-title h1 {
             font-size: 1.8em;
             margin-bottom: 6px;
@@ -139,6 +147,47 @@
             overflow: auto;
         }
 
+        .approval-note {
+            margin: 10px 0 12px;
+            border-radius: 8px;
+            padding: 12px;
+            border: 1px solid rgba(134, 150, 160, 0.2);
+            background: #111b21;
+            color: #d1d7db;
+            line-height: 1.45;
+        }
+
+        .approval-note.need {
+            border-color: rgba(251, 191, 36, 0.5);
+            background: linear-gradient(135deg, rgba(251, 191, 36, 0.16), #111b21);
+        }
+
+        .approval-note.safe {
+            border-color: rgba(0, 168, 132, 0.45);
+        }
+
+        .approval-note strong {
+            display: block;
+            color: #e9edef;
+            margin-bottom: 4px;
+        }
+
+        .lab-plan-actions {
+            display: grid;
+            gap: 8px;
+            margin: 10px 0 12px;
+        }
+
+        .lab-plan-actions .lab-button {
+            min-height: 40px;
+        }
+
+        .lab-action-note {
+            color: #8696a0;
+            font-size: 0.84em;
+            line-height: 1.4;
+        }
+
         @media (max-width: 820px) {
             .lab-grid {
                 grid-template-columns: 1fr;
@@ -161,7 +210,11 @@
                 <h1>Screen-AI Model Lab</h1>
                 <p>PC browser test page for command understanding, model routing, and safe plan previews.</p>
             </div>
-            <a class="lab-button secondary" href="/remote/links.html" style="text-decoration:none;display:grid;place-items:center;min-height:40px;">Links</a>
+            <div class="lab-actions">
+                <button id="cache-clear-btn" class="lab-button secondary" type="button">Clear Cache</button>
+                <a class="lab-button secondary" href="/remote/index.html" style="text-decoration:none;display:grid;place-items:center;min-height:40px;">Remote</a>
+                <a class="lab-button secondary" href="/remote/links.html" style="text-decoration:none;display:grid;place-items:center;min-height:40px;">Links</a>
+            </div>
         </header>
 
         <section class="lab-grid">
@@ -184,22 +237,32 @@
             <aside class="lab-panel">
                 <h2 style="font-size:1em;margin-bottom:8px;">Latest Plan</h2>
                 <div id="lab-meta" class="lab-meta"></div>
+                <div id="approval-note" class="approval-note">No preview yet.</div>
+                <div id="lab-plan-actions" class="lab-plan-actions"></div>
                 <pre id="lab-json" class="lab-pre">No preview yet.</pre>
             </aside>
         </section>
     </main>
 
+    <script src="api.js"></script>
     <script>
         const thread = document.getElementById('lab-thread');
         const input = document.getElementById('lab-input');
         const meta = document.getElementById('lab-meta');
         const jsonBox = document.getElementById('lab-json');
+        const approvalNote = document.getElementById('approval-note');
+        const planActions = document.getElementById('lab-plan-actions');
+        const apiClient = window.ScreenAI?.api;
 
         document.getElementById('preview-btn').addEventListener('click', preview);
+        document.getElementById('cache-clear-btn').addEventListener('click', clearAppCache);
         document.getElementById('clear-btn').addEventListener('click', () => {
             input.value = '';
             meta.replaceChildren();
+            planActions.replaceChildren();
             jsonBox.textContent = 'No preview yet.';
+            approvalNote.className = 'approval-note';
+            approvalNote.textContent = 'No preview yet.';
         });
 
         input.addEventListener('keydown', (event) => {
@@ -214,18 +277,69 @@
             addMessage('outgoing', text);
             const thinking = addMessage('incoming', 'Planning...');
             try {
-                const response = await fetch('/command/preview', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({text}),
-                });
-                const data = await response.json();
+                const data = apiClient && location.protocol !== 'file:'
+                    ? await apiClient.commands.preview(text)
+                    : await previewWithFetch(text);
                 renderPlan(data);
                 thinking.querySelector('.message-text').textContent = summarize(data);
             } catch (error) {
-                thinking.querySelector('.message-text').textContent = `Preview failed: ${error.message}`;
+                thinking.querySelector('.message-text').textContent = explainPreviewError(error);
             }
             thread.scrollTop = thread.scrollHeight;
+        }
+
+        async function clearAppCache() {
+            const deleted = [];
+            if ('caches' in window) {
+                const keys = await caches.keys();
+                await Promise.all(keys.map((key) => {
+                    deleted.push(key);
+                    return caches.delete(key);
+                }));
+            }
+            if ('serviceWorker' in navigator) {
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                await Promise.all(registrations.map((registration) => registration.update()));
+            }
+            addMessage(
+                'incoming',
+                deleted.length
+                    ? `Cleared ${deleted.length} cache bucket(s). Refreshing fresh files now.`
+                    : 'No old cache buckets found. Refreshing fresh files now.'
+            );
+            setTimeout(() => location.reload(), 450);
+        }
+
+        async function previewWithFetch(text) {
+            const response = await fetch(resolveApiPath('/command/preview'), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text}),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(data.detail || data.message || `HTTP ${response.status}`);
+            }
+            return data;
+        }
+
+        function resolveApiPath(path) {
+            if (location.protocol === 'file:') {
+                return `http://localhost:8000${path}`;
+            }
+            return path;
+        }
+
+        function explainPreviewError(error) {
+            const msg = error?.message || String(error);
+            if (msg === 'Failed to fetch' || msg.includes('NetworkError')) {
+                return [
+                    'Preview failed: local backend is not reachable.',
+                    'Start Screen-AI with ai_pc_operator\\start.bat, then refresh this page.',
+                    'Expected API: http://localhost:8000/command/preview',
+                ].join('\n');
+            }
+            return `Preview failed: ${msg}`;
         }
 
         function addMessage(direction, text) {
@@ -259,14 +373,104 @@
                 chip.textContent = label;
                 meta.appendChild(chip);
             });
+            renderApprovalNote(data);
+            renderPlanActions(data);
             jsonBox.textContent = JSON.stringify({
                 status: data.status,
                 intent: data.intent,
                 risk_level: data.risk_level,
                 requires_approval: data.requires_approval,
                 plan: data.plan,
+                execution_graph: data.execution_graph,
                 model_plan: data.model_plan,
             }, null, 2);
+        }
+
+        function renderApprovalNote(data) {
+            const risk = Number(data.risk_level || 0);
+            const needsApproval = Boolean(data.requires_approval);
+            approvalNote.className = `approval-note ${needsApproval ? 'need' : 'safe'}`;
+            if (needsApproval) {
+                approvalNote.innerHTML = [
+                    '<strong>Approval will be required.</strong>',
+                    'This lab is Preview only, so it does not create a real approval request.',
+                    'Open Remote, pair your device, press Send there, and the Approve/Reject buttons will appear in the command screen.'
+                ].join(' ');
+                return;
+            }
+            approvalNote.innerHTML = [
+                '<strong>No approval needed for this preview.</strong>',
+                `Risk ${risk} commands are low-risk. Approve/Reject appears only when risk policy requires approval, usually risk 3 or higher.`
+            ].join(' ');
+        }
+
+        function renderPlanActions(data) {
+            planActions.replaceChildren();
+            const text = input.value.trim();
+            const steps = data.plan?.steps || [];
+            if (!text || !steps.length) return;
+
+            if (data.requires_approval) {
+                const remote = document.createElement('a');
+                remote.className = 'lab-button secondary';
+                remote.href = '/remote/index.html';
+                remote.textContent = 'Open Remote for Approval';
+                remote.style.textDecoration = 'none';
+                remote.style.display = 'grid';
+                remote.style.placeItems = 'center';
+                planActions.appendChild(remote);
+                const note = document.createElement('div');
+                note.className = 'lab-action-note';
+                note.textContent = 'Preview is read-only. Use Remote Send so the backend can pause and show Approve/Reject.';
+                planActions.appendChild(note);
+                return;
+            }
+
+            const run = document.createElement('button');
+            run.className = 'lab-button';
+            run.type = 'button';
+            run.textContent = 'Run Low-Risk Plan';
+            run.addEventListener('click', () => runLowRiskPlan(text));
+            planActions.appendChild(run);
+            const note = document.createElement('div');
+            note.className = 'lab-action-note';
+            note.textContent = 'Runs the command through /command only when preview says no approval is required.';
+            planActions.appendChild(note);
+        }
+
+        async function runLowRiskPlan(text) {
+            const working = addMessage('incoming', 'Executing low-risk plan...');
+            try {
+                const data = apiClient && location.protocol !== 'file:'
+                    ? await apiClient.commands.send(text)
+                    : await executeWithFetch(text);
+                working.querySelector('.message-text').textContent = summarizeExecution(data);
+            } catch (error) {
+                working.querySelector('.message-text').textContent = `Execution failed: ${error.message || error}`;
+            }
+        }
+
+        async function executeWithFetch(text) {
+            const response = await fetch(resolveApiPath('/command'), {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text}),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(data.detail || data.message || `HTTP ${response.status}`);
+            }
+            return data;
+        }
+
+        function summarizeExecution(data) {
+            if (data.requires_approval) {
+                return 'Execution paused for approval. Open Remote to approve or reject.';
+            }
+            return [
+                `Status: ${data.status || 'unknown'}`,
+                data.result || data.error || 'No result text returned.',
+            ].join('\n');
         }
 
         function summarize(data) {

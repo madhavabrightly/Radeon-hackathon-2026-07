@@ -47,9 +47,16 @@ class RedactingFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.msg = self.redactor.redact(str(record.msg))
         if record.args:
-            record.args = tuple(
-                self.redactor.redact(str(arg)) for arg in record.args
-            )
+            if isinstance(record.args, dict):
+                record.args = {
+                    key: self.redactor.redact(value) if isinstance(value, str) else value
+                    for key, value in record.args.items()
+                }
+            else:
+                record.args = tuple(
+                    self.redactor.redact(arg) if isinstance(arg, str) else arg
+                    for arg in record.args
+                )
         return True
 
 # Setup logging with redaction
@@ -98,6 +105,14 @@ async def lifespan(app: FastAPI):
     )
 
     logger.info("AI PC Operator started successfully")
+
+    # Seed MVP skill pack on first boot
+    try:
+        seeded = await agent_router.ensure_skills_seeded()
+        if seeded:
+            logger.info("Seeded %d MVP skills", seeded)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Skill seeding failed: %s", exc)
 
     yield
 
@@ -189,6 +204,52 @@ class BiometricVerifyRequest(BaseModel):
     """Verify a biometric challenge response."""
     challenge_id: str
     response: str
+
+
+# ============================================================
+# New spec models (ag.md §3-§7)
+# ============================================================
+
+
+class SkillExecuteRequest(BaseModel):
+    """Execute a registered skill by id."""
+    skill_id: str
+    inputs: dict = {}
+    command_id: Optional[int] = None
+
+
+class TaskNodeSpec(BaseModel):
+    """A single node in a task graph."""
+    id: Optional[str] = None
+    node_type: str = "act"  # observe | decide | act | verify | rollback | ask_user | summarize
+    skill_id: Optional[str] = None
+    depends_on: list = []
+    inputs: dict = {}
+
+
+class TaskRunRequest(BaseModel):
+    """Create and run a task graph."""
+    name: str
+    nodes: list  # list[TaskNodeSpec]
+    command_id: Optional[int] = None
+
+
+class MemoryRememberRequest(BaseModel):
+    """Save a memory entry."""
+    kind: str
+    key: str
+    value: str
+    confidence: float = 1.0
+    source: str = "user"
+
+
+class WorkflowTemplateRequest(BaseModel):
+    """Save a workflow template."""
+    template_id: str
+    name: str
+    plan: list
+    description: str = ""
+    trigger_text: str = ""
 
 
 # REST API endpoints
@@ -555,6 +616,205 @@ async def get_history(
         )
         rows = await cursor.fetchall()
     return {"history": [dict(row) for row in rows]}
+
+
+# ============================================================
+# New spec endpoints: skills, tasks, memory, templates
+# ============================================================
+
+
+@app.get("/skills")
+async def list_skills(
+    domain: Optional[str] = None,
+    query: Optional[str] = None,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """List registered skills, optionally filtered by domain or search query."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    skills = await agent_router.list_skills(domain=domain, query=query)
+    return {"skills": skills, "count": len(skills)}
+
+
+@app.post("/skills/execute")
+async def execute_skill(
+    request: SkillExecuteRequest,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Execute a registered skill by id."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    result = await agent_router.execute_skill(
+        request.skill_id,
+        request.inputs,
+        command_id=request.command_id,
+    )
+    return result
+
+
+@app.get("/skills/{skill_id}/metrics")
+async def get_skill_metrics(
+    skill_id: str,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Return aggregate metrics for a skill."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    return await agent_router.skill_metrics(skill_id)
+
+
+@app.post("/tasks")
+async def run_task(
+    request: TaskRunRequest,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Create and run a task graph (DAG)."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    return await agent_router.run_task(
+        request.name,
+        request.nodes,
+        command_id=request.command_id,
+    )
+
+
+@app.get("/tasks/{task_id}")
+async def get_task(
+    task_id: str,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Return a task and its trace events."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    task = await agent_router.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+@app.post("/tasks/{task_id}/cancel")
+async def cancel_task(
+    task_id: str,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Cancel a running task."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    ok = await agent_router.cancel_task(task_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail="Task cannot be cancelled")
+    return {"cancelled": True}
+
+
+@app.post("/memory/remember")
+async def remember(
+    request: MemoryRememberRequest,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Save a memory entry."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    await agent_router.remember(
+        request.kind, request.key, request.value,
+        request.confidence, request.source,
+    )
+    return {"saved": True}
+
+
+@app.get("/memory/recall")
+async def recall(
+    kind: str,
+    key: str,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Recall a memory entry by kind+key."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    entry = await agent_router.recall(kind, key)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return entry
+
+
+@app.get("/memory/search")
+async def search_memory(
+    query: str,
+    kind: Optional[str] = None,
+    limit: int = 20,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Search memory entries."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    return {
+        "results": await agent_router.search_memory(query, kind=kind, limit=limit),
+    }
+
+
+@app.post("/workflows")
+async def save_workflow(
+    request: WorkflowTemplateRequest,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Save a workflow template."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    await agent_router.save_workflow_template(
+        request.template_id,
+        request.name,
+        request.plan,
+        request.description,
+        request.trigger_text,
+    )
+    return {"saved": True}
+
+
+@app.get("/workflows")
+async def list_workflows(
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """List workflow templates."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    return {"templates": await agent_router.list_workflow_templates()}
+
+
+@app.get("/workflows/match")
+async def match_workflow(
+    text: str,
+    device_id: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    """Match a workflow template by trigger text."""
+    if not agent_router:
+        raise HTTPException(status_code=503, detail="Server not ready")
+    await require_device_auth(device_id, authorization)
+    template = await agent_router.match_workflow_template(text)
+    if template is None:
+        return {"matched": False}
+    return {"matched": True, "template": template}
 
 
 # WebSocket for real-time updates

@@ -74,6 +74,11 @@ class Planner:
                 r"\b(close|quit|exit)\b.*\b(browser|chrome|edge|tab)\b",
                 r"\b(close|quit|exit)\b\s+(browser|chrome|edge)\b",
             ],
+            "browser_session": [
+                r"browser[\s_]*session",
+                r"\bkeep\s+(browser|session|pc|computer)\s+(awake|alive|open|active)\b",
+                r"\bkeep\s+(awake|alive|active)\b.*\b(browser|session)\b",
+            ],
             "open_app": [
                 r"\b(open|launch|start|run)\b.*\b(app|application|program)\b",
                 r"\b(open|launch|start|run)\b\s+\w+",
@@ -191,6 +196,19 @@ class Planner:
             return {
                 "steps": [
                     {"tool": "browser.close", "args": {}},
+                ]
+            }
+
+        elif intent == "browser_session":
+            app = self._extract_app_name(text)
+            # If extraction returned the intent itself or empty, default to chrome
+            if not app or app.replace("_", "").replace(" ", "") == intent.replace("_", ""):
+                app = "chrome"
+            return {
+                "steps": [
+                    {"tool": "system.open_app", "args": {"name": app}},
+                    {"tool": "system.keep_awake", "args": {}},
+                    {"tool": "system.mouse_jiggle", "args": {}},
                 ]
             }
 

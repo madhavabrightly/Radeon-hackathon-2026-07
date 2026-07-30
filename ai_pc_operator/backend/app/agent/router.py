@@ -43,6 +43,22 @@ from app.runtime.ssd_tier import SSDTierManager
 from app.runtime.tier_manager import AgentTierManager
 from app.runtime.strategy import StrategyRouter
 from app.runtime.telemetry import Telemetry
+from app.skills.registry import SkillRegistry
+from app.skills.runtime import SkillRuntime
+from app.skills.verification import VerificationEngine
+from app.skills.mvp_pack import seed_mvp_skills
+from app.agent.task_graph import TaskGraphExecutor, TaskContext
+from app.agent.memory_engine import MemoryEngine
+from app.agent.graph_schema import (
+    NODE_TYPES as GRAPH_NODE_TYPES,
+    RISK_LEVELS as GRAPH_RISK_LEVELS,
+    plan_to_graph,
+    validate_node as validate_graph_node,
+    insert_approval_nodes as graph_insert_approval_nodes,
+)
+from app.observability.tracer import Tracer
+from app.agent.intent_engine import IntentEngine, IntentResult
+from app.agent.planner_engine import PlannerEngine, Plan
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +96,22 @@ class AgentRouter:
         self.strategy = StrategyRouter()
         self.telemetry = Telemetry()
         self._register_lazy_models()
+
+        # New spec modules (ag.md §3-§7)
+        self.skill_registry = SkillRegistry()
+        self.verification_engine = VerificationEngine()
+        self.skill_runtime = SkillRuntime(self.skill_registry, self.verification_engine)
+        self.task_graph = TaskGraphExecutor(
+            self.skill_registry,
+            self.verification_engine,
+        )
+        self.memory_engine = MemoryEngine()
+        self.tracer = Tracer()
+        self._skills_seeded = False
+
+        # Intent Engine + Planner Engine (new 6+7 stage pipelines)
+        self.intent_engine = IntentEngine()
+        self.planner_engine = PlannerEngine()
 
         # Tool registry
         self.tools = {
@@ -195,6 +227,15 @@ class AgentRouter:
             logger.info(f"Tier decision: {tier_decision}")
             await self._update_command_metadata(command_id, intent, risk_level)
 
+            # Step 2b: Run Intent Engine + Planner Engine for enriched understanding
+            engine_enrichment = self._run_intent_and_planner_engines(
+                text, intent, {}
+            )
+            if engine_enrichment.get("enriched_params"):
+                logger.info(
+                    f"Engine enrichment: params={engine_enrichment['enriched_params']}"
+                )
+
             # Step 4: Check permissions
             requires_approval = self.permission_engine.requires_approval(
                 risk_level, intent
@@ -288,22 +329,29 @@ class AgentRouter:
             # Step 8: Verify results
             verified = all(r.get("status") == "success" for r in results)
 
+            # Step 8b: Wrap the plan in the planning-engine execution-graph schema
+            execution_graph = self._build_execution_graph(plan, risk_level)
+
             # Step 9: Format response with telemetry + strategy data
             pipeline_ms = (time.time() - pipeline_start) * 1000
             response = {
                 "command_id": command_id,
+                "intent": intent,
+                "risk": risk_level,
                 "status": "completed" if verified else "partial",
                 "result": self._format_results(results),
                 "requires_approval": requires_approval,
                 "runtime": tier_decision.to_dict(),
                 "ssd_tier": ssd_plan.to_dict(),
                 "model_plan": model_plan,
+                "execution_graph": execution_graph,
                 "telemetry": {
                     "pipeline_ms": round(pipeline_ms, 1),
                     "tools_executed": len(results),
                     "tools_succeeded": sum(1 for r in results if r.get("status") == "success"),
                     "strategy": self.strategy.status(),
                 },
+                "engines": engine_enrichment,
             }
 
             await self._update_command_status(
@@ -333,6 +381,80 @@ class AgentRouter:
             }
         finally:
             await self._maintenance()
+
+    def _run_intent_and_planner_engines(
+        self,
+        text: str,
+        intent: str,
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Run the Intent Engine and Planner Engine to enrich the plan.
+
+        Returns a dict with:
+            - intent_result: full IntentResult from IntentEngine
+            - plan: full Plan from PlannerEngine
+            - enriched_params: params merged with extracted entities
+        """
+        try:
+            # Run Intent Engine for richer understanding
+            intent_result: IntentResult = self.intent_engine.process(text)
+
+            # Use intent engine's params if available, else fall back
+            enriched_params = intent_result.params or params
+
+            # Run Planner Engine for structured plan
+            plan: Plan = self.planner_engine.plan(
+                intent=intent,
+                params=enriched_params,
+            )
+
+            return {
+                "intent_result": intent_result.to_dict(),
+                "plan": plan.to_dict(),
+                "enriched_params": enriched_params,
+            }
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Intent/Planner engine enrichment failed: {e}")
+            return {
+                "intent_result": None,
+                "plan": None,
+                "enriched_params": params,
+                "error": str(e),
+            }
+
+    def _build_execution_graph(
+        self,
+        plan: Dict[str, Any],
+        risk_level: int,
+    ) -> Dict[str, Any]:
+        """Wrap a legacy plan in the planning-engine execution-graph schema.
+
+        Returns a dict with:
+            - nodes: list of planning-engine nodes
+            - validation: {ok, errors}
+            - node_count: int
+            - approval_required: bool
+        """
+        try:
+            nodes = plan_to_graph(plan, risk_level=risk_level)
+            validation = validate_graph_node(nodes)
+            approval_required = any(
+                n.get("type") == "approval" for n in nodes
+            )
+            return {
+                "nodes": nodes,
+                "validation": validation,
+                "node_count": len(nodes),
+                "approval_required": approval_required,
+            }
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Failed to build execution graph: {e}")
+            return {
+                "nodes": [],
+                "validation": {"ok": False, "errors": [str(e)]},
+                "node_count": 0,
+                "approval_required": False,
+            }
 
     async def preview_plan(self, text: str) -> Dict[str, Any]:
         """Return the planned interpretation of a command without executing it."""
@@ -371,6 +493,7 @@ class AgentRouter:
             else llm_plan or await self.planner.create_plan(text, intent)
         )
         steps = plan.get("steps", [])
+        execution_graph = self._build_execution_graph(plan, risk_level)
         return {
             "status": "planned" if steps else "unsupported",
             "input": self.redactor.redact(text),
@@ -379,6 +502,7 @@ class AgentRouter:
             "requires_approval": requires_approval,
             "plan": self.redactor.redact_dict(plan),
             "step_count": len(steps),
+            "execution_graph": execution_graph,
             "runtime": self.tier_manager.decide(
                 intent,
                 budget,
@@ -386,6 +510,7 @@ class AgentRouter:
             ).to_dict(),
             "ssd_tier": ssd_plan.to_dict(),
             "model_plan": model_plan,
+            "engines": self._run_intent_and_planner_engines(text, intent, {}),
             "message": (
                 "Ready to execute after Send."
                 if steps
@@ -456,6 +581,174 @@ class AgentRouter:
                 "tool": tool_name,
                 "error": str(e),
             }
+
+    # ------------------------------------------------------------------
+    # New spec API: skills, task graph, memory, observability
+    # ------------------------------------------------------------------
+
+    async def ensure_skills_seeded(self) -> int:
+        """Seed the MVP skill pack on first boot. Idempotent."""
+        if self._skills_seeded:
+            return 0
+        existing = await self.skill_registry.list(enabled_only=False)
+        if existing:
+            self._skills_seeded = True
+            return 0
+        count = await seed_mvp_skills(self.skill_registry)
+        self._skills_seeded = True
+        return count
+
+    async def execute_skill(
+        self,
+        skill_id: str,
+        inputs: Optional[Dict[str, Any]] = None,
+        command_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Execute a registered skill by id."""
+        await self.ensure_skills_seeded()
+        await self.tracer.event(
+            "act",
+            skill_id=skill_id,
+            payload={"inputs": inputs or {}},
+        )
+        result = await self.skill_runtime.execute(
+            skill_id,
+            inputs or {},
+            command_id=command_id,
+        )
+        await self.tracer.event(
+            "verify" if result.verification_passed else "error",
+            skill_id=skill_id,
+            payload={
+                "status": result.status.value,
+                "duration_ms": result.duration_ms,
+                "verification_passed": result.verification_passed,
+            },
+            duration_ms=result.duration_ms,
+        )
+        return result.model_dump()
+
+    async def run_task(
+        self,
+        name: str,
+        nodes: List[Dict[str, Any]],
+        command_id: Optional[int] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create and run a task graph (DAG)."""
+        await self.ensure_skills_seeded()
+        task = await self.task_graph.create_task(name, nodes, command_id=command_id)
+        await self.tracer.event("plan", task_id=task.id, payload={"name": name, "node_count": len(nodes)})
+        ctx = {"skill_runtime": self.skill_runtime}
+        if context:
+            ctx.update(context)
+        task = await self.task_graph.run(task, ctx)
+        await self.tracer.event(
+            "summarize" if task.status.value == "completed" else "error",
+            task_id=task.id,
+            payload={"status": task.status.value, "error": task.error},
+        )
+        return {
+            "task_id": task.id,
+            "status": task.status.value,
+            "current_node": task.current_node,
+            "error": task.error,
+            "nodes": [
+                {
+                    "id": n.id,
+                    "node_type": n.node_type.value,
+                    "skill_id": n.skill_id,
+                    "status": n.status,
+                    "attempts": n.attempts,
+                    "error": n.error,
+                    "outputs": n.outputs,
+                }
+                for n in task.nodes
+            ],
+        }
+
+    async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Return a task and its trace events."""
+        task = await self.task_graph.get(task_id)
+        if task is None:
+            return None
+        trace = await self.tracer.trace_task(task_id)
+        return {
+            "task_id": task.id,
+            "name": task.name,
+            "status": task.status.value,
+            "current_node": task.current_node,
+            "error": task.error,
+            "nodes": [
+                {
+                    "id": n.id,
+                    "node_type": n.node_type.value,
+                    "skill_id": n.skill_id,
+                    "status": n.status,
+                    "attempts": n.attempts,
+                    "error": n.error,
+                }
+                for n in task.nodes
+            ],
+            "trace": trace,
+        }
+
+    async def cancel_task(self, task_id: str) -> bool:
+        return await self.task_graph.cancel(task_id)
+
+    async def list_skills(
+        self,
+        domain: Optional[str] = None,
+        query: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        await self.ensure_skills_seeded()
+        if query:
+            skills = await self.skill_registry.search(query)
+        else:
+            skills = await self.skill_registry.list(domain=domain)
+        return [s.model_dump() for s in skills]
+
+    async def skill_metrics(self, skill_id: str) -> Dict[str, Any]:
+        return await self.skill_registry.metrics(skill_id)
+
+    async def remember(
+        self,
+        kind: str,
+        key: str,
+        value: str,
+        confidence: float = 1.0,
+        source: str = "user",
+    ) -> None:
+        await self.memory_engine.remember(kind, key, value, confidence, source)
+
+    async def recall(self, kind: str, key: str) -> Optional[Dict[str, Any]]:
+        return await self.memory_engine.recall(kind, key)
+
+    async def search_memory(
+        self,
+        query: str,
+        kind: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        return await self.memory_engine.search_memory(query, kind=kind, limit=limit)
+
+    async def save_workflow_template(
+        self,
+        template_id: str,
+        name: str,
+        plan: List[Dict[str, Any]],
+        description: str = "",
+        trigger_text: str = "",
+    ) -> None:
+        await self.memory_engine.save_template(
+            template_id, name, plan, description, trigger_text
+        )
+
+    async def list_workflow_templates(self) -> List[Dict[str, Any]]:
+        return await self.memory_engine.list_templates()
+
+    async def match_workflow_template(self, text: str) -> Optional[Dict[str, Any]]:
+        return await self.memory_engine.match_template(text)
 
     async def _save_command(
         self, text: str, device_id: Optional[str]

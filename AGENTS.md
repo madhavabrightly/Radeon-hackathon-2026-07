@@ -109,6 +109,77 @@ SSD mmap Qwen only for complex/unknown commands
 teacher model only in cloud/distillation or explicit fallback
 ```
 
+## 2026-07-30 Preview/Test Stability Note
+
+If the Model Lab shows:
+
+```text
+Preview failed: Failed to fetch
+```
+
+check the local backend before changing planner logic:
+
+```text
+http://localhost:8000/runtime
+http://localhost:8000/command/preview
+```
+
+`lab.html` now uses the shared `ScreenAI.api` client and reports a clearer backend-not-reachable message. The service worker cache version is `screenai-v4-api-lab` and includes `api.js`/`ui.js`.
+
+Tests that touch the new skill/task/memory tables should use `SCREEN_AI_DB_PATH` with a temp SQLite file so they do not lock or corrupt the live `ai_pc_operator/data/agent.db` while the app is running.
+
+## 2026-07-30 Inline Approval Note
+
+The phone/remote command screen now has an inline approval surface:
+
+```text
+command sent -> backend creates approval -> UI polls /approvals/pending -> Approve/Reject buttons appear in chat
+```
+
+Do not reduce the `/command` request timeout below the backend approval wait. The frontend currently allows about 310 seconds because the backend waits up to 300 seconds for approval resolution.
+
+## 2026-07-30 Plan-To-Action Note
+
+Preview is now connected to action:
+
+```text
+Preview -> inspect plan/graph/model route -> Send this plan / Approve and send -> backend command pipeline
+```
+
+The Model Lab stays safer:
+
+```text
+low risk preview -> Run Low-Risk Plan
+high risk preview -> Open Remote for Approval
+```
+
+Do not add direct high-risk execution to the lab. High-risk commands must go through the Remote command screen so the pending approval card can be shown and resolved through the existing `/approvals/*` flow.
+
+## 2026-07-30 Pipeline Agent Runtime Note
+
+Use this command to exercise the large JS pipeline as an agent planner:
+
+```powershell
+node pipeline/cli.js agent "open chrome" --dry-run --auto-approve
+node pipeline/cli.js agent "delete file C:\Temp\danger.txt" --dry-run --auto-approve
+node pipeline/cli.js agent "run whoami" --dry-run --auto-approve
+```
+
+Expected behavior:
+
+```text
+text -> AgentRuntime -> intent -> context -> plan -> runtime graph -> ExecutionGraphRunner
+high risk action -> auto approval node -> action node -> verify/finish
+```
+
+Native C++ helper artifact:
+
+```text
+ai_pc_operator/data/native/screenai_core_native.dll
+```
+
+The DLL is a plain ABI artifact, not a Node addon. `NativeBridge` still uses JS fallbacks until a Node binding exposes `call(op, input)`.
+
 ## System Architecture
 
 ```text
@@ -1682,3 +1753,1357 @@ Relation-map notes:
 - `relation-map.md` and `ai_pc_operator/relation-map.md` are intentionally identical.
 - The router method in the map is `process_command()`, with `preview_plan()` for dry planning.
 - Keep the map updated whenever adding endpoint, runtime, database, native, or frontend-worker behavior.
+
+## Skill Registry, Task Graph, Verification, Memory, Tracer: 2026-07-25 +05:30
+
+The agent now has a formal skill registry, DAG task executor, layered verification engine, persistent memory engine, and structured tracer layered on top of the existing pipeline.
+
+New backend modules:
+
+```text
+ai_pc_operator/backend/app/skills/
+  contracts.py        # Pydantic types: SkillDefinition, SkillInputSpec, SkillOutputSpec, SkillVerificationSpec, SkillPermission, SkillStatus, SkillRunRequest, SkillRunResult
+  registry.py         # SQLite-backed SkillRegistry: register, get, list, search, enable, delete, record_run, metrics, recent_runs
+  verification.py     # VerificationEngine with 8 built-in verifiers: file_exists, file_contains, http_status, json_path, process_healthy, ocr_text, dom_state, screenshot_diff
+  runtime.py          # SkillRuntime: handler resolution, retry, timeout, verification, metrics recording
+  handlers.py         # Async wrappers around existing tools: file_list, file_scan, file_quarantine, file_restore, file_read, system_status, system_disk_usage, system_ram_usage, system_processes, system_open_app, browser_open, browser_search, browser_close, screen_scan, screen_click_text, vault_unlock, vault_lock, vault_list, meta_echo, meta_sleep
+  mvp_pack.py         # 50-skill MVP pack across 6 domains: files (10), os (10), browser (10), screen/app (5), auth/vault (5), meta (10)
+
+ai_pc_operator/backend/app/agent/
+  task_graph.py       # DAG executor: NodeType (observe, decide, act, verify, rollback, ask_user, summarize), TaskStatus, TaskNode, Task, TaskContext, TaskGraphExecutor
+  memory_engine.py    # MemoryEngine: remember, recall, search_memory, forget, list_memory, save_template, get_template, list_templates, match_template
+
+ai_pc_operator/backend/app/observability/
+  tracer.py           # Tracer: event, trace_task, recent_events for structured trace events
+```
+
+New DB tables (13):
+
+```text
+skills, skill_inputs, skill_outputs, skill_dependencies, skill_verification_methods,
+skill_permissions, skill_runs, skill_metrics, tasks, task_nodes, evidence,
+workflow_templates, memory_entries, trace_events
+```
+
+New REST endpoints:
+
+```text
+GET  /skills                          # list registered skills
+POST /skills/execute                  # execute a skill by id
+GET  /skills/{skill_id}/metrics       # aggregate metrics for a skill
+POST /tasks                           # create and run a DAG task
+GET  /tasks/{task_id}                 # get task status and node results
+POST /tasks/{task_id}/cancel          # cancel a running task
+POST /memory/remember                 # store a memory entry
+GET  /memory/recall                   # recall memories by key
+GET  /memory/search                   # search memories by query
+POST /workflows                       # save a workflow template
+GET  /workflows                       # list workflow templates
+GET  /workflows/match                 # match a workflow template to a command
+```
+
+AgentRouter extensions:
+
+```text
+ensure_skills_seeded()                # idempotent MVP skill seeding
+execute_skill(skill_id, inputs)       # run a skill through SkillRuntime
+run_task(spec)                        # create and run a DAG task
+get_task(task_id)                     # fetch task status
+cancel_task(task_id)                  # cancel a running task
+list_skills(domain=None)              # list registered skills
+skill_metrics(skill_id)               # get skill metrics
+remember(key, value, tags)            # store memory
+recall(key)                           # recall memory
+search_memory(query)                  # search memory
+save_workflow_template(name, steps)   # save workflow
+list_workflow_templates()             # list workflows
+match_workflow_template(command)      # match workflow to command
+```
+
+Lifespan now seeds the 50-skill MVP pack on startup.
+
+Verified:
+
+```powershell
+python -u .\ai_pc_operator\backend\test_new_spec.py
+# All new-spec tests passed.
+
+python -u .\ai_pc_operator\backend\test_basic.py
+# All tests passed! [ok]
+```
+
+Important implementation notes:
+
+- Pydantic v2 requires keyword arguments for BaseModel constructors. Use `SkillInputSpec(name="x", type="string")` not `SkillInputSpec("x", "string")`.
+- The `record_run` SQL must bind exactly the number of `?` placeholders. The metrics INSERT has 5 `?` in VALUES and 3 `?` in the ON CONFLICT clause, so 8 bindings total.
+- The MVP skill pack is seeded once on startup; subsequent boots are idempotent.
+- Task graph nodes can be `observe`, `decide`, `act`, `verify`, `rollback`, `ask_user`, or `summarize`.
+- Memory entries support tags for filtered recall.
+- Workflow templates match by keyword overlap with the incoming command.
+## Planning-Engine Refactor: 2026-07-25 +05:30
+
+The pipeline layer was refactored to follow the autonomous planning-engine specification with deterministic execution, verification, recovery, and risk-aware approval nodes.
+
+### New Node Types
+
+```
+observe     # gather information (read-only)
+decide      # branch based on observation
+parallel    # fan-out to multiple branches
+act         # perform an action (may need approval)
+verify      # check that an action succeeded
+retry       # retry a failed node with backoff
+rollback    # undo a previous action
+checkpoint  # save state for potential rollback
+approval    # request user/phone approval (auto-inserted for risk >= 3)
+wait        # wait for external event
+replan      # generate a new sub-plan
+finish      # terminal node
+```
+
+### Risk Levels
+
+```
+READ_ONLY         = 0  # safe to run without approval
+SAFE_LOCAL        = 1  # local file ops, no approval needed
+LOCAL_DESTRUCTIVE = 2  # deletes/moves local files, may need approval
+EXTERNAL          = 3  # touches external systems, approval required
+CRITICAL          = 4  # permanent delete, credentials, financial
+```
+
+### Key Files
+
+```
+pipeline/operations.js          # NODE_TYPES, RISK_LEVELS, buildNode, validateNode, insertApprovalNodes, OPERATIONS registry
+pipeline/engine.js              # ExecutionGraphRunner + legacy Pipeline (backward compat)
+pipeline/cli.js                 # --graph flag, --auto-approve, --vars, validate command
+pipeline/screenai_pipelines.js  # graph pipelines: scaffoldFullGraph, backupDatabaseGraph, cleanGraph, researchCollectGraph
+ai_pc_operator/backend/app/agent/graph_schema.py  # Python mirror of planning-engine schema
+ai_pc_operator/backend/app/agent/router.py        # AgentRouter now emits execution_graph in responses
+```
+
+### CLI Usage
+
+```powershell
+# Validate a graph without running
+node pipeline/cli.js validate path/to/graph.json
+
+# Run a graph with auto-approval
+node pipeline/cli.js graph path/to/graph.json --auto-approve
+
+# Run with custom variables
+node pipeline/cli.js graph path/to/graph.json --auto-approve --vars '{"root":"."}'
+```
+
+### Auto-Approval Insertion
+
+Any node with risk >= 3 (EXTERNAL or CRITICAL) automatically gets an upstream approval node inserted before it. This ensures high-risk actions always have a gate.
+
+### Backward Compatibility
+
+The legacy Pipeline class is preserved with synchronous run(), middleware support, step-specific vars, events, describe(), onError(), and PipelineRegistry. All 43 existing pipeline tests pass.
+
+### Verified
+
+```powershell
+node pipeline/test_pipeline.js
+# Results: 43/43 passed, 0 failed
+
+python -u .\ai_pc_operator\backend\test_basic.py
+# All tests passed! [ok]
+
+python -u .\ai_pc_operator\backend\test_new_spec.py
+# All new-spec tests passed.
+
+node pipeline/cli.js validate pipeline/_test_tmp/sample_graph.json
+# Graph is valid (5 nodes)
+
+node pipeline/cli.js graph pipeline/_test_tmp/sample_graph.json --auto-approve
+# Execution graph completed. Status: completed, Nodes: 5, Waves: 5
+```
+
+
+## browser_session Intent (Added 2026-07-30)
+
+A new intent `browser_session` was added to the planner to support the user's request:
+
+> Intent: browser_session
+> Risk: 1
+> 1. system.open_app
+> 2. system.keep_awake
+> 3. system.mouse_jiggle
+> .auto approval everytime
+
+### Implementation
+
+- Intent pattern: `r"browser[\s_]*session"` (handles both `browser_session` and `browser session`)
+- Risk level: 1 (auto-approval, no mobile prompt)
+- Plan: 3 steps - `system.open_app` (chrome), `system.keep_awake`, `system.mouse_jiggle`
+- App name: defaults to `chrome` when extraction returns the intent itself
+
+### Files Changed
+
+- `ai_pc_operator/backend/app/agent/planner.py` - Added `browser_session` intent + plan
+- `ai_pc_operator/backend/app/agent/router.py` - Added `intent` and `risk` to response
+- `ai_pc_operator/backend/app/agent/graph_schema.py` - Fixed `insert_approval_nodes` to handle non-numeric IDs
+
+### Verified
+
+```powershell
+python _test_browser_session.py
+# STATUS: 200
+# intent: browser_session
+# risk: 1
+# status: completed
+# requires_approval: False
+# node_count: 6
+# nodes: 6
+#   - observe agent.planner risk= 0
+#   - act system.open_app risk= 1
+#   - act system.keep_awake risk= 1
+#   - act system.mouse_jiggle risk= 1
+#   - verify  risk= 0
+#   - finish  risk= 0
+# result: '✓ system.open_app: Opened Google Chrome
+#          ✓ system.keep_awake: Done
+#          ✓ system.mouse_jiggle: Mouse movement scheduled for 60 minute(s)'
+```
+
+## Pipeline Phases 7-9: Observation, Verification, Native C++ Bridge
+
+The `pipeline/screenai_pipelines.js` file now contains 9 phases of utility classes plus 249 graph pipelines across 13 domains.
+
+### Phase 7 — Observation Engine (10 utilities)
+
+```text
+WindowObserver, ProcessObserver, BrowserObserver, FilesystemObserver,
+ClipboardObserver, OCRObserver, VisionObserver, AccessibilityObserver,
+NetworkObserver, SystemObserver
+```
+
+Each observer has subscribe/unsubscribe/notify pattern with native hooks for C++ acceleration.
+
+### Phase 8 — Verification Engine (10 utilities)
+
+```text
+StateVerifier, UIVerifier, DOMVerifier, OCRVerifier, FilesystemVerifier,
+APIVerifier, ProcessVerifier, WindowVerifier, ImageVerifier, CustomVerifier
+```
+
+CustomVerifier is wired to the native `verifier_bridge` (sha256, image dimensions, byte-diff).
+
+### Phase 9 — Native C++ Bridge
+
+A unified `NativeBridge` class wraps all C++ accelerators behind a single JS API.
+
+```text
+NativeBridge
+  call(op, input)              # unified op-code dispatch
+  monotonicMs()                # Phase 3: monotonic clock
+  sleepMs(ms)                  # Phase 3: native sleep
+  enumerateProcesses()         # Phase 4: Win32 Toolhelp / /proc
+  enumerateWindows()           # Phase 4: Win32 EnumWindows
+  getFocusedWindowTitle()      # Phase 4: focused window
+  stringSimilarity(a, b)       # Phase 5: Jaccard + char
+  normalizeIntent(s)           # Phase 5: lowercase + trim
+  computePlanCost(costs)       # Phase 6: sum
+  computeRiskScore(risks)      # Phase 6: weighted max + avg
+  topologicalSort(n, adj)      # Phase 6: Kahn's algorithm
+  getCpuPercent()              # Phase 7: CPU usage
+  getMemoryUsage()             # Phase 7: memory stats
+  getDiskUsage(path)           # Phase 7: disk stats
+  getNetworkStats()            # Phase 7: network stats
+  getUptimeSeconds()           # Phase 7: uptime
+  verify(checkType, target)    # Phase 8: native verifier
+```
+
+### Native C++ Files
+
+```text
+hackathon_ui_operator_distill/native/
+  verifier_bridge.h            # Phase 8 verifier header
+  verifier_bridge.cpp          # SHA-256, image dims, byte-diff
+  screenai_core.h              # Unified header for all phases
+  screenai_core.cpp            # Unified implementation
+```
+
+### Op Codes
+
+```text
+0-1   runtime (monotonic_ms, sleep_ms)
+10-12 context (processes, windows, focused)
+20-21 intent (similarity, normalize)
+30-32 planner (cost, risk, topo_sort)
+40-44 observation (cpu, mem, disk, net, uptime)
+50    verify (delegates to verifier_bridge)
+```
+
+### JS Fallbacks
+
+When the native addon is absent, every method falls back to pure-JS:
+
+- `monotonicMs` → `Date.now()`
+- `stringSimilarity` → Jaccard on word tokens
+- `topologicalSort` → Kahn's algorithm
+- `getCpuPercent` → `os.cpus()` times
+- `getMemoryUsage` → `process.memoryUsage()` + `os.totalmem()`
+- `getDiskUsage` → `fs.statfsSync()`
+- `getUptimeSeconds` → `process.uptime()`
+- `computeRiskScore` → weighted max + average
+
+### Verified
+
+```powershell
+node -c pipeline\screenai_pipelines.js
+# syntax OK
+
+node pipeline\test_pipeline.js
+# Results: 43/43 passed, 0 failed
+
+node -e "const p = require('./pipeline/screenai_pipelines.js'); ..."
+# PHASE 1: 13/13 pass
+# PHASE 2: 10/10 pass
+# PHASE 3: 12/12 pass
+# PHASE 4: 10/10 pass
+# PHASE 5: 10/10 pass
+# PHASE 6: 10/10 pass
+# PHASE 7: 10/10 pass
+# PHASE 8: 10/10 pass
+# NATIVE BRIDGE: 12/12 pass
+# TOTAL: 97/97 pass, 0 fail
+```
+
+### Build Target
+
+```text
+ai_pc_operator/data/native/*.node
+```
+
+When the native addon is built and placed at the target path, `NativeBridge.isAvailable()` returns `true` and all methods use C++ implementations. Until then, JS fallbacks provide correct behavior.
+
+## Pipeline Phase 9: Recovery Engine (2026-07-30)
+
+The `pipeline/screenai_pipelines.js` file now contains 10 phases of utility classes plus 249 graph pipelines across 13 domains.
+
+### Phase 9 — Recovery Engine (10 utilities)
+
+```text
+RetryStrategy, AlternativePipeline, RollbackManager, ReObserver,
+Replanner, SafeAbort, UserApprovalGate, FailureClassifier,
+RecoveryPolicy, RecoveryHistory
+```
+
+### Recovery Capabilities
+
+| Utility | Purpose |
+|---------|---------|
+| `RetryStrategy` | Configurable retry with exponential/linear/fixed backoff + jitter |
+| `AlternativePipeline` | Fallback pipeline registry with usage stats |
+| `RollbackManager` | Checkpoint stack with undo functions |
+| `ReObserver` | Re-scan state from window/process/filesystem after failure |
+| `Replanner` | Generate new sub-plan skipping failed nodes |
+| `SafeAbort` | Graceful shutdown with cleanup functions + timeout |
+| `UserApprovalGate` | Request user intervention with approve/reject/timeout |
+| `FailureClassifier` | Categorize errors: timeout, permission, network, etc. |
+| `RecoveryPolicy` | Rules per category: retry, abort, rollback, replan |
+| `RecoveryHistory` | Learn from past failures with frequency + success rate |
+
+### Default Recovery Policies
+
+```text
+timeout      -> retry (3 attempts, exponential)
+network      -> retry (5 attempts, exponential)
+rate_limit   -> retry (3 attempts, exponential, 1s base)
+memory       -> retry (2 attempts, linear)
+permission   -> abort
+validation   -> abort
+crash        -> rollback
+not_found    -> replan
+conflict     -> replan
+dependency   -> replan
+unknown      -> retry (1 attempt, fixed)
+```
+
+### Native C++ Hooks (Op Codes 60-63)
+
+```text
+60 = classify_failure       # returns category string
+61 = compute_backoff        # exponential backoff with jitter
+62 = hash_error_signature   # djb2 hash for dedup
+63 = compute_retry_budget   # max - used, clamped to >= 0
+```
+
+### JS Fallbacks
+
+When the native addon is absent, every method falls back to pure-JS:
+
+- `classifyFailure` → keyword matching on error message
+- `computeBackoff` → `base * 2^attempt + 10% jitter`
+- `hashErrorSignature` → djb2 hash returning `sig_<hex>`
+- `computeRetryBudget` → `max(0, max - used)`
+
+### Verified
+
+```powershell
+node -c pipeline\screenai_pipelines.js
+# syntax OK
+
+node pipeline\test_pipeline.js
+# Results: 43/43 passed, 0 failed
+
+# Phase audit
+PHASE 1: 13/13 pass
+PHASE 2: 10/10 pass
+PHASE 3: 12/12 pass
+PHASE 4: 10/10 pass
+PHASE 5: 10/10 pass
+PHASE 6: 10/10 pass
+PHASE 7: 10/10 pass
+PHASE 8: 10/10 pass
+PHASE 9: 10/10 pass
+NATIVE BRIDGE: 12/12 pass
+TOTAL: 95/95 pass, 0 fail
+```
+
+### Integration Pattern
+
+```javascript
+// 1. Classify the failure
+const category = globalFailureClassifier.classify(error);
+
+// 2. Look up the recovery policy
+const decision = globalRecoveryPolicy.decide(category);
+
+// 3. Execute the recovery action
+switch (decision.action) {
+  case 'retry':
+    await globalRetryStrategy.execute(fn);
+    break;
+  case 'rollback':
+    await globalRollbackManager.rollbackAll();
+    break;
+  case 'replan':
+    const newPlan = await globalReplanner.replan({ failedNodeId });
+    break;
+  case 'abort':
+    await globalSafeAbort.abort(decision.reason);
+    break;
+}
+
+// 4. Record the outcome for learning
+globalRecoveryHistory.record(error, { category, action: decision.action, success: true });
+```
+
+## Pipeline Phase 10: Event System (2026-07-30)
+
+The `pipeline/screenai_pipelines.js` file now contains 10 phases of utility classes plus 249 graph pipelines across 13 domains.
+
+### Phase 10 — Event System (10 utilities)
+
+```text
+EventBus, EventTypes, EventEmitter, EventSubscriber, EventFilter,
+EventRouter, EventRecorder, EventReplayer, EventAggregator, EventTracer
+```
+
+### Event System Capabilities
+
+| Utility | Purpose |
+|---------|---------|
+| `EventBus` | Central pub/sub with pause/resume, history, wildcard subscribers |
+| `EventTypes` | Typed event catalog with categories (pipeline, window, browser, file, perception, user, approval, context, recovery, system) |
+| `EventEmitter` | Per-source event emission with local listeners |
+| `EventSubscriber` | Fluent subscription builder: onType, onTypes, onCategory, onSource, onPredicate, onMinPriority |
+| `EventFilter` | Filter events by type/source/category/priority/time/predicate |
+| `EventRouter` | Route events to handlers with exact match, wildcard patterns, and fallback |
+| `EventRecorder` | Record events with timestamps and offsets for replay |
+| `EventReplayer` | Replay recorded events with optional real-time pacing |
+| `EventAggregator` | Aggregate events into time-windowed summaries by type/source/category |
+| `EventTracer` | Trace event flows for debugging with step-by-step capture |
+
+### Event Type Catalog (38 types)
+
+```text
+Pipeline:    PipelineStarted, PipelineCompleted, PipelineFailed, PipelineCancelled
+Window:      WindowOpened, WindowClosed, WindowFocused, WindowResized
+Browser:     BrowserLoaded, BrowserNavigated, BrowserTabChanged
+Download:    DownloadStarted, DownloadProgress, DownloadFinished, DownloadFailed
+File:        FileChanged, FileCreated, FileDeleted, FileRenamed
+Perception:  OCRCompleted, OCRFailed, VisionDetected, VisionMatched
+User:        UserInterrupted, UserCommand, UserAction
+Approval:    ApprovalRequested, ApprovalGranted, ApprovalRejected, ApprovalExpired
+Context:     ContextUpdated, ContextCleared
+Recovery:    RecoveryStarted, RecoveryCompleted, RecoveryFailed
+System:      SystemError, SystemWarning, SystemInfo
+```
+
+### Native C++ Hooks (Op Codes 70-73)
+
+```text
+70 = event_timestamp        # monotonic timestamp for event ordering
+71 = generate_event_id      # unique event id with prefix
+72 = hash_event_payload     # djb2 hash for event dedup
+73 = compute_event_priority # priority score by event type + age
+```
+
+### JS Fallbacks
+
+When the native addon is absent, every method falls back to pure-JS:
+
+- `eventTimestamp` → `Date.now()`
+- `generateEventId` → `<prefix>_<timestamp>_<random>`
+- `hashEventPayload` → djb2 hash returning `evt_<hex>`
+- `computeEventPriority` → base priority by event type minus age decay
+
+### Verified
+
+```powershell
+node -c pipeline\screenai_pipelines.js
+# syntax OK
+
+node pipeline\test_pipeline.js
+# Results: 43/43 passed, 0 failed
+
+# Phase audit
+PHASE 1: 13/13 pass
+PHASE 2: 10/10 pass
+PHASE 3: 12/12 pass
+PHASE 4: 10/10 pass
+PHASE 5: 10/10 pass
+PHASE 6: 10/10 pass
+PHASE 7: 10/10 pass
+PHASE 8: 10/10 pass
+PHASE 9: 10/10 pass
+PHASE 10: 10/10 pass
+NATIVE BRIDGE: 16/16 pass
+TOTAL: 105/105 pass, 0 fail
+```
+
+### Integration Pattern
+
+```javascript
+// 1. Subscribe to events with filters
+const sub = new EventSubscriber({ bus: globalEventBus })
+  .onCategory('pipeline')
+  .onMinPriority(50)
+  .subscribe(event => {
+    console.log('Pipeline event:', event.type, event.payload);
+  });
+
+// 2. Emit events from any source
+const emitter = new EventEmitter('my-source', globalEventBus);
+emitter.emit('PipelineStarted', { pipelineId: 'abc123' });
+
+// 3. Route events to handlers
+const router = new EventRouter();
+router.route('PipelineFailed', event => handleFailure(event));
+router.route('Browser*', event => handleBrowserEvent(event));
+router.setFallback(event => logUnhandled(event));
+
+// 4. Record and replay for debugging
+globalEventRecorder.start();
+emitter.emit('PipelineStarted', { id: '1' });
+emitter.emit('PipelineCompleted', { id: '1' });
+const events = globalEventRecorder.getEvents();
+await globalEventReplayer.replay(events);
+
+// 5. Trace event flows
+globalEventTracer.startFlow('user-command-1', { type: 'UserCommand' });
+globalEventTracer.trace('user-command-1', { type: 'PipelineStarted' });
+globalEventTracer.trace('user-command-1', { type: 'PipelineCompleted' });
+const flow = globalEventTracer.endFlow('user-command-1');
+```
+
+## Pipeline Phase 11: Memory System (2026-07-30)
+
+The `pipeline/screenai_pipelines.js` file now contains 11 phases of utility classes plus 249 graph pipelines across 13 domains.
+
+### Phase 11 — Memory System (10 utilities)
+
+```text
+ShortTermMemory, LongTermMemory, TaskHistory, WorkflowMemory,
+UserPreferences, ApplicationProfile, ActionFrequency,
+ObservationCache, MemoryCleanup, MemoryIndex
+```
+
+### Memory System Capabilities
+
+| Utility | Purpose |
+|---------|---------|
+| `ShortTermMemory` | In-flight task context with TTL-based expiry and access tracking |
+| `LongTermMemory` | Persistent knowledge with importance scoring, tags, and relevance search |
+| `TaskHistory` | Record of past task executions with success rate and average duration |
+| `WorkflowMemory` | Successful and failed workflow patterns with match-by-command |
+| `UserPreferences` | Learned user behavior with confidence-weighted merging |
+| `ApplicationProfile` | Per-app usage patterns: launch count, common actions, avg duration |
+| `ActionFrequency` | Frequently used actions ranked by count and recency |
+| `ObservationCache` | Cached screen/perception results with TTL and hit statistics |
+| `MemoryCleanup` | TTL-based eviction for short-term, observations, and long-term memory |
+| `MemoryIndex` | Fast lookup by hashed key with reverse index for cleanup |
+
+### Memory Tiers
+
+```text
+Short-term:  in-flight task context, TTL-based expiry (default 10 min)
+Long-term:   persistent knowledge, importance-scored, tag-indexed
+Task history: append-only log of past executions
+Workflow:    successful/failed patterns with match scoring
+Preferences: explicit + learned user behavior
+App profile: per-application usage statistics
+Frequency:   action usage counts and recency
+Observations: cached perception results with TTL
+```
+
+### Native C++ Hooks (Op Codes 80-83)
+
+```text
+80 = compute_memory_relevance  # token overlap + recency score
+81 = hash_memory_key           # djb2 hash for indexing
+82 = compute_memory_ttl        # importance-based TTL in ms
+83 = compute_cleanup_priority  # age + access + importance score
+```
+
+### JS Fallbacks
+
+When the native addon is absent, every method falls back to pure-JS:
+
+- `computeMemoryRelevance` → token overlap (70%) + recency decay (30%)
+- `hashMemoryKey` → djb2 hash returning `mem_<hex>`
+- `computeMemoryTTL` → `86400000 * (importance / 50)`
+- `computeCleanupPriority` → age score + access score + importance score
+
+### Verified
+
+```powershell
+node -c pipeline\screenai_pipelines.js
+# syntax OK
+
+node pipeline\test_pipeline.js
+# Results: 43/43 passed, 0 failed
+
+# Phase audit
+PHASE 1: 13/13 pass
+PHASE 2: 10/10 pass
+PHASE 3: 12/12 pass
+PHASE 4: 10/10 pass
+PHASE 5: 10/10 pass
+PHASE 6: 10/10 pass
+PHASE 7: 10/10 pass
+PHASE 8: 10/10 pass
+PHASE 9: 10/10 pass
+PHASE 10: 10/10 pass
+PHASE 11: 10/10 pass
+NATIVE BRIDGE: 20/20 pass
+TOTAL: 115/115 pass, 0 fail
+```
+
+### Integration Pattern
+
+```javascript
+// 1. Store short-term context for current task
+globalShortTermMemory.set('current.command', 'open chrome', 300000);
+const cmd = globalShortTermMemory.get('current.command');
+
+// 2. Store long-term knowledge with importance and tags
+globalLongTermMemory.store('user.name', 'Alice', {
+  importance: 90,
+  tags: ['user', 'profile']
+});
+
+// 3. Search long-term memory by relevance
+const results = globalLongTermMemory.search('user preferences', { limit: 5 });
+
+// 4. Record task execution
+const task = globalTaskHistory.record({
+  command: 'open chrome',
+  intent: 'browser_open'
+});
+globalTaskHistory.complete(task.id, 'success');
+
+// 5. Learn user preferences from behavior
+globalUserPreferences.learn('theme', 'dark', 0.6);
+globalUserPreferences.learn('theme', 'dark', 0.7); // confidence increases
+
+// 6. Track application usage
+globalApplicationProfile.recordLaunch('chrome', 5000);
+globalApplicationProfile.recordAction('chrome', 'new_tab');
+
+// 7. Cache observation results
+globalObservationCache.set('screen.hash123', { elements: 226 }, 30000);
+const cached = globalObservationCache.get('screen.hash123');
+
+// 8. Periodic cleanup
+const cleanupResults = globalMemoryCleanup.cleanupAll({
+  shortTerm: globalShortTermMemory,
+  observations: globalObservationCache,
+  longTerm: globalLongTermMemory
+});
+```
+
+## Pipeline Phase 13: Skill Orchestrator (2026-07-30)
+
+The `pipeline/screenai_pipelines.js` file now contains 12 phases of utility classes plus 249 graph pipelines across 13 domains.
+
+### Phase 13 — Skill Orchestrator (10 utilities)
+
+```text
+SkillDiscovery, SkillRanking, SkillFallback, SkillChaining,
+SkillDependencyResolver, SkillCache, SkillHealthMonitor,
+ProviderSelector, SkillRetryPolicy, SkillMetrics
+```
+
+### Skill Orchestrator Capabilities
+
+| Utility | Purpose |
+|---------|---------|
+| `SkillDiscovery` | Find skills by query, tags, or capability with match scoring |
+| `SkillRanking` | Rank skills by weighted match/health/cost score |
+| `SkillFallback` | Chain of fallback skills when primary fails |
+| `SkillChaining` | Compose multiple skills into a sequential pipeline |
+| `SkillDependencyResolver` | Topological sort of skill dependencies with cycle detection |
+| `SkillCache` | Cache skill results with TTL and hit statistics |
+| `SkillHealthMonitor` | Track success/failure rates and average duration per skill |
+| `ProviderSelector` | Choose best provider for a capability by health/cost/latency |
+| `SkillRetryPolicy` | Per-skill retry strategies with exponential/linear backoff |
+| `SkillMetrics` | Aggregate metrics across all skills with summary stats |
+
+### Native C++ Hooks (Op Codes 90-93)
+
+```text
+90 = compute_skill_match       # token overlap + tag match (0-100)
+91 = compute_skill_health      # success rate + speed score (0-100)
+92 = compute_skill_chain_cost  # sum of per-skill costs
+93 = compute_skill_retry_budget # max - used, clamped to >= 0
+```
+
+### JS Fallbacks
+
+When the native addon is absent, every method falls back to pure-JS:
+
+- `computeSkillMatch` → token overlap (60%) + tag match (40%)
+- `computeSkillHealth` → success rate (80%) + speed score (20%)
+- `computeSkillChainCost` → `skills.length * 10`
+- `computeSkillRetryBudget` → `max(0, max - used)`
+
+### Verified
+
+```powershell
+node -c pipeline\screenai_pipelines.js
+# syntax OK
+
+node pipeline\test_pipeline.js
+# Results: 43/43 passed, 0 failed
+
+# Phase audit
+PHASE 13: 31/31 pass
+```
+
+### Integration Pattern
+
+```javascript
+// 1. Register and discover skills
+globalSkillDiscovery.register({
+  id: 'open_chrome',
+  name: 'open_chrome',
+  tags: ['browser', 'open'],
+  capabilities: ['launch_app'],
+  provider: 'system'
+});
+const matches = globalSkillDiscovery.find('open chrome');
+
+// 2. Rank candidates by weighted score
+const ranked = globalSkillRanking.rank(candidates, 'open chrome');
+
+// 3. Define fallback chain
+globalSkillFallback.define('open_chrome', ['open_edge', 'open_firefox']);
+const result = await globalSkillFallback.execute('open_chrome', async (id) => {
+  return await launchApp(id);
+});
+
+// 4. Compose skills into a chain
+globalSkillChaining.define('research_flow', ['search', 'extract', 'save']);
+const chainResult = await globalSkillChaining.execute('research_flow', executor);
+
+// 5. Resolve dependencies topologically
+globalSkillDependencyResolver.add('save', ['extract']);
+globalSkillDependencyResolver.add('extract', ['search']);
+const order = globalSkillDependencyResolver.resolve(['save', 'extract', 'search']);
+
+// 6. Cache skill results
+globalSkillCache.set('search.amd_rocm', results, 60000);
+const cached = globalSkillCache.get('search.amd_rocm');
+
+// 7. Monitor skill health
+globalSkillHealthMonitor.recordSuccess('open_chrome', 250);
+globalSkillHealthMonitor.recordFailure('open_chrome', 'timeout', 5000);
+const health = globalSkillHealthMonitor.health('open_chrome');
+
+// 8. Select best provider for a capability
+globalProviderSelector.register({
+  id: 'openai',
+  capabilities: ['llm'],
+  health: 90,
+  cost: 30,
+  latency: 200
+});
+const best = globalProviderSelector.select('llm');
+
+// 9. Apply retry policy
+globalSkillRetryPolicy.define('open_chrome', {
+  maxAttempts: 5,
+  backoff: 'exponential',
+  baseDelayMs: 1000
+});
+const retried = await globalSkillRetryPolicy.execute('open_chrome', executor);
+
+// 10. Aggregate metrics
+globalSkillMetrics.record('open_chrome', true, 250);
+const summary = globalSkillMetrics.summary();
+```
+
+## Pipeline Phase 14: State Manager (2026-07-30)
+
+The `pipeline/screenai_pipelines.js` file now contains 14 phases of utility classes plus 249 graph pipelines across 13 domains.
+
+### Phase 14 — State Manager (10 utilities)
+
+```text
+DesktopState, BrowserState, WindowState, FileState, TaskState,
+ExecutionState, PipelineState, AgentState, ResourceState, StateVariableStore
+```
+
+### State Manager Capabilities
+
+| Utility | Purpose |
+|---------|---------|
+| `DesktopState` | Desktop environment state (wallpaper, theme, resolution, monitors) |
+| `BrowserState` | Browser session state (tabs, active tab, URL, title) |
+| `WindowState` | Window/UI state (focused, open, minimized) |
+| `FileState` | Filesystem state (watched paths, recent files, change detection) |
+| `TaskState` | Task execution state (status, progress, started/completed) |
+| `ExecutionState` | Pipeline execution state (nodes, status, result) |
+| `PipelineState` | Pipeline registry state (name, version, status) |
+| `AgentState` | Agent brain state (mode, intent, plan, memory) |
+| `ResourceState` | System resource state (CPU, memory, disk, network, uptime) |
+| `StateVariableStore` | Shared variable store with scope-based access |
+
+### State Tiers
+
+```text
+Desktop:    wallpaper, theme, resolution, monitor layout
+Browser:    tabs, active tab, URL, title, history
+Window:     focused window, open windows, minimized windows
+File:       watched paths, recent files, change events
+Task:       status, progress, started/completed timestamps
+Execution:  node states, pipeline status, results
+Pipeline:   registered pipelines, versions, statuses
+Agent:      mode, intent, plan, memory references
+Resource:   CPU, memory, disk, network, uptime
+Variables:  scoped key-value store with TTL
+```
+
+### Native C++ Hooks (Op Codes 100-103)
+
+```text
+100 = compute_state_hash              # djb2 hash of state JSON
+101 = compute_state_diff              # character-level diff percentage
+102 = compute_state_freshness         # age vs max-age freshness score
+103 = compute_state_eviction_priority # age + access + size priority
+```
+
+### JS Fallbacks
+
+When the native addon is absent, every method falls back to pure-JS:
+
+- `computeStateHash` → djb2 hash returning `st_<hex>`
+- `computeStateDiff` → character-level diff percentage (0-100)
+- `computeStateFreshness` → `(max_age - age) / max_age * 100`
+- `computeStateEvictionPriority` → age score (40) + access score (30) + size score (30)
+
+### Verified
+
+```powershell
+node -c pipeline\screenai_pipelines.js
+# syntax OK
+
+node pipeline\test_pipeline.js
+# Results: 43/43 passed, 0 failed
+
+# Phase audit
+PHASE 14: 42/42 pass
+TOTAL: 157/157 pass, 0 fail
+```
+
+### Integration Pattern
+
+```javascript
+// 1. Track desktop environment state
+globalDesktopState.update({ wallpaper: 'dark', theme: 'dark', resolution: '1920x1080' });
+const desktop = globalDesktopState.snapshot();
+
+// 2. Track browser session state
+globalBrowserState.openTab('https://example.com', 'Example');
+globalBrowserState.setActiveTab(0);
+const activeTab = globalBrowserState.getActiveTab();
+
+// 3. Track window/UI state
+globalWindowState.setFocused('chrome.exe', 'Google Chrome');
+const focused = globalWindowState.getFocused();
+
+// 4. Track filesystem state
+globalFileState.watch('C:/Users/brigh/Documents');
+globalFileState.recordChange('C:/Users/brigh/Documents/file.txt', 'modified');
+const changes = globalFileState.getRecentChanges(10);
+
+// 5. Track task execution state
+globalTaskState.start('task-1', 'open chrome');
+globalTaskState.updateProgress('task-1', 50);
+globalTaskState.complete('task-1', 'success');
+const task = globalTaskState.get('task-1');
+
+// 6. Track pipeline execution state
+globalExecutionState.startNode('node-1', 'observe');
+globalExecutionState.completeNode('node-1', { result: 'ok' });
+const execution = globalExecutionState.snapshot();
+
+// 7. Track pipeline registry state
+globalPipelineState.register('open_chrome', '1.0.0');
+globalPipelineState.setStatus('open_chrome', 'active');
+const pipeline = globalPipelineState.get('open_chrome');
+
+// 8. Track agent brain state
+globalAgentState.setMode('planning');
+globalAgentState.setIntent('browser_open');
+globalAgentState.setPlan(['observe', 'act', 'verify']);
+const agent = globalAgentState.snapshot();
+
+// 9. Track system resource state
+globalResourceState.update({ cpu: 45, memory: 60, disk: 70 });
+const resources = globalResourceState.snapshot();
+
+// 10. Use shared variable store
+globalStateVariableStore.set('user.name', 'Alice', { scope: 'global', ttl: 3600000 });
+const name = globalStateVariableStore.get('user.name');
+const userVars = globalStateVariableStore.byScope('user');
+```
+
+## Pipeline Phase 15: Workflow Engine (2026-07-30)
+
+The `pipeline/screenai_pipelines.js` file now contains 15 phases of utility classes plus 249 graph pipelines across 13 domains.
+
+### Phase 15 — Workflow Engine (10 utilities)
+
+```text
+WorkflowBuilder, WorkflowBrancher, WorkflowLoop, WorkflowCondition,
+WorkflowParallel, WorkflowScheduler, WorkflowTrigger, WorkflowTemplate,
+WorkflowNested, WorkflowPersistence
+```
+
+### Workflow Engine Capabilities
+
+| Utility | Purpose |
+|---------|---------|
+| `WorkflowBuilder` | Compose nodes into a workflow with edges and metadata |
+| `WorkflowBrancher` | Conditional execution paths with then/else branches |
+| `WorkflowLoop` | Iterate over collections or until condition with max-iteration guard |
+| `WorkflowCondition` | Evaluate predicates with evaluateAll/evaluateAny helpers |
+| `WorkflowParallel` | Fan-out concurrent execution with Promise.all |
+| `WorkflowScheduler` | Cron-like scheduling with interval-based tick |
+| `WorkflowTrigger` | Event-driven execution with optional payload filter |
+| `WorkflowTemplate` | Reusable workflow definitions with parameter instantiation |
+| `WorkflowNested` | Workflows within workflows with depth limit and flatten |
+| `WorkflowPersistence` | Save/load workflows to disk with hash and metadata |
+
+### Native C++ Hooks (Op Codes 110-113)
+
+```text
+110 = compute_workflow_complexity   # nodes + depth weighted score (0-100)
+111 = compute_workflow_parallelism # branches * width / 10 (0-100)
+112 = compute_workflow_priority     # priority * 10 - due/1000 (0-100)
+113 = compute_workflow_retry_budget # max(0, max - used)
+```
+
+### JS Fallbacks
+
+When the native addon is absent, every method falls back to pure-JS:
+
+- `computeWorkflowComplexity` → `min(100, nodes * 5 + depth * 10)`
+- `computeWorkflowParallelism` → `min(100, branches * width / 10)`
+- `computeWorkflowPriority` → `max(0, min(100, priority * 10 - due / 1000))`
+- `computeWorkflowRetryBudget` → `max(0, max - used)`
+
+### Verified
+
+```powershell
+node -c pipeline\screenai_pipelines.js
+# syntax OK
+
+node pipeline\test_pipeline.js
+# Results: 43/43 passed, 0 failed
+
+node pipeline\_test_tmp\phase15_audit.js
+# PHASE 15: 40/40 pass
+```
+
+### Integration Pattern
+
+```javascript
+// 1. Build a workflow with nodes and edges
+globalWorkflowBuilder.create('research_flow', { name: 'Research Flow' });
+globalWorkflowBuilder.addNode('research_flow', 'search', { type: 'act', tool: 'browser.search' });
+globalWorkflowBuilder.addNode('research_flow', 'extract', { type: 'act', tool: 'browser.extract' });
+globalWorkflowBuilder.addNode('research_flow', 'save', { type: 'act', tool: 'file.save' });
+globalWorkflowBuilder.addEdge('research_flow', 'search', 'extract');
+globalWorkflowBuilder.addEdge('research_flow', 'extract', 'save');
+
+// 2. Branch on a condition
+globalWorkflowBrancher.define('mode_branch',
+  { key: 'mode', value: 'auto' },
+  'auto_path',
+  'manual_path'
+);
+const branch = globalWorkflowBrancher.evaluate('mode_branch', { mode: 'auto' });
+
+// 3. Loop over a collection
+globalWorkflowLoop.define('process_items', { collection: items });
+let step;
+while ((step = globalWorkflowLoop.iterate('process_items')) && !step.done) {
+  await processItem(step.item);
+}
+
+// 4. Evaluate conditions
+globalWorkflowCondition.define('is_ready', ctx => ctx.status === 'ready');
+const ready = globalWorkflowCondition.evaluate('is_ready', { status: 'ready' });
+
+// 5. Run tasks in parallel
+globalWorkflowParallel.define('parallel_extract', [url1, url2, url3]);
+const results = await globalWorkflowParallel.execute('parallel_extract', async (url) => {
+  return await extract(url);
+});
+
+// 6. Schedule a workflow
+globalWorkflowScheduler.define('daily_backup', 'backup_wf', '0 0 * * *', { intervalMs: 86400000 });
+const due = globalWorkflowScheduler.tick();
+
+// 7. Trigger a workflow on event
+globalWorkflowTrigger.define('on_file_change', 'file_changed', 'process_file');
+const fired = globalWorkflowTrigger.fire('file_changed', { path: '/data/file.txt' });
+
+// 8. Instantiate a template
+globalWorkflowTemplate.define('open_chrome_tpl', 'open_chrome', { steps: ['launch'] }, [
+  { name: 'url', default: 'https://google.com' }
+]);
+const instance = globalWorkflowTemplate.instantiate('open_chrome_tpl', { url: 'https://example.com' });
+
+// 9. Nest workflows
+globalWorkflowNested.nest('parent_wf', 'child_wf');
+const children = globalWorkflowNested.getChildren('parent_wf');
+const flat = globalWorkflowNested.flatten('parent_wf');
+
+// 10. Persist a workflow
+globalWorkflowPersistence.save('research_flow', workflowData);
+const loaded = globalWorkflowPersistence.load('research_flow');
+```
+
+## Pipeline Phase 16: Provider Abstraction (2026-07-30)
+
+The `pipeline/screenai_pipelines.js` file now contains 16 phases of utility classes plus 249 graph pipelines across 13 domains.
+
+### Phase 16 — Provider Abstraction (10 utilities)
+
+```text
+ProviderRegistry, ProviderSelectorV2, ProviderFallback, ProviderLoadBalancer,
+ProviderCircuitBreaker, ProviderHealthMonitor, ProviderCapabilityMatcher,
+ProviderConfigManager, ProviderMetricsCollector, ProviderLifecycleManager
+```
+
+### Provider Abstraction Capabilities
+
+| Utility | Purpose |
+|---------|---------|
+| `ProviderRegistry` | Catalog of available implementations: register, unregister, get, list, findByCapability |
+| `ProviderSelectorV2` | Pick best provider for a capability by weighted health/cost/latency score |
+| `ProviderFallback` | Chain of alternative providers with reliability-weighted depth |
+| `ProviderLoadBalancer` | Distribute requests across providers by free-capacity weight |
+| `ProviderCircuitBreaker` | Isolate failing providers with closed/half-open/open states |
+| `ProviderHealthMonitor` | Track success/failure rates and average latency per provider |
+| `ProviderCapabilityMatcher` | Match providers to capabilities with capability tags |
+| `ProviderConfigManager` | Per-provider configuration with merge and delete |
+| `ProviderMetricsCollector` | Aggregate provider stats: calls, errors, latency, success rate |
+| `ProviderLifecycleManager` | Init/shutdown/restart providers with status tracking |
+
+### Provider Domains
+
+```text
+Browser       - Chrome, Edge, Firefox, Playwright, system default
+Vision        - OmniParser, YOLO, OpenCV, native UIA
+OCR           - PaddleOCR, Tesseract, EasyOCR, Windows OCR
+LLM           - Qwen, Phi, Gemma, llama.cpp, Ollama, cloud
+Filesystem    - local, SMB, cloud, virtual
+Terminal      - PowerShell, cmd, bash, native
+Email         - SMTP, IMAP, Graph, Gmail API
+Documents     - PDF, DOCX, XLSX, Markdown, plain text
+Network       - HTTP, HTTPS, WebSocket, raw TCP
+OS            - Windows, Linux, macOS, WSL
+```
+
+### Native C++ Hooks (Op Codes 120-123)
+
+```text
+120 = compute_provider_score       # weighted (health 50% + cost 20% + latency 30%)
+121 = compute_fallback_depth       # length (60%) + reliability (40%)
+122 = compute_load_weight          # free capacity percentage
+123 = compute_circuit_state        # 0=closed, 1=half-open, 2=open
+```
+
+### JS Fallbacks
+
+When the native addon is absent, every method falls back to pure-JS:
+
+- `computeProviderScore` → `health * 0.5 + (100 - cost) * 0.2 + (100 - latency) * 0.3`
+- `computeFallbackDepth` → `length * 0.6 + reliability * 0.4`
+- `computeLoadWeight` → `(capacity - current_load) / capacity * 100`
+- `computeCircuitState` → `failures >= threshold ? 2 : failures > 0 ? 1 : 0`
+
+### Verified
+
+```powershell
+node -c pipeline\screenai_pipelines.js
+# syntax OK
+
+node pipeline\test_pipeline.js
+# Results: 43/43 passed, 0 failed
+
+node pipeline\_test_tmp\phase16_audit.js
+# PHASE 16: 34/34 pass
+```
+
+### Integration Pattern
+
+```javascript
+// 1. Register providers in the catalog
+globalProviderRegistry.register({
+  id: 'chrome',
+  type: 'browser',
+  capabilities: ['navigate', 'click', 'type', 'screenshot'],
+  health: 95,
+  cost: 20,
+  latency: 50
+});
+
+// 2. Find providers by capability
+const browsers = globalProviderRegistry.findByCapability('navigate');
+
+// 3. Select best provider for a capability
+const best = globalProviderSelectorV2.select('navigate', { preferLowCost: true });
+
+// 4. Define fallback chain
+globalProviderFallback.define('navigate', ['chrome', 'edge', 'firefox']);
+const result = await globalProviderFallback.execute('navigate', async (id) => {
+  return await navigateWith(id);
+});
+
+// 5. Load balance across providers
+globalProviderLoadBalancer.addProvider('chrome', { capacity: 10 });
+globalProviderLoadBalancer.addProvider('edge', { capacity: 8 });
+const acquired = globalProviderLoadBalancer.acquire();
+await doWork(acquired);
+globalProviderLoadBalancer.release(acquired);
+
+// 6. Use circuit breaker for failing providers
+if (globalProviderCircuitBreaker.canCall('chrome')) {
+  try {
+    await navigateWith('chrome');
+    globalProviderCircuitBreaker.recordSuccess('chrome');
+  } catch (e) {
+    globalProviderCircuitBreaker.recordFailure('chrome');
+  }
+}
+
+// 7. Monitor provider health
+globalProviderHealthMonitor.recordSuccess('chrome', 50);
+globalProviderHealthMonitor.recordFailure('chrome', 'timeout');
+const health = globalProviderHealthMonitor.health('chrome');
+
+// 8. Match providers to capabilities
+globalProviderCapabilityMatcher.register('chrome', ['navigate', 'click']);
+const matches = globalProviderCapabilityMatcher.match('click');
+
+// 9. Configure providers
+globalProviderConfigManager.set('chrome', { headless: true, timeout: 30000 });
+const cfg = globalProviderConfigManager.get('chrome');
+
+// 10. Collect metrics and manage lifecycle
+globalProviderMetricsCollector.recordCall('chrome', true, 50);
+const summary = globalProviderMetricsCollector.summary();
+await globalProviderLifecycleManager.init('chrome');
+await globalProviderLifecycleManager.shutdown('chrome');
+```
+## Pipeline Phase 17: Agent Runtime (2026-07-30)
+
+The `pipeline/screenai_pipelines.js` file now contains 17 phases of utility classes plus 249 graph pipelines across 13 domains.
+
+### Phase 17 — Agent Runtime (10 utilities)
+
+```text
+IntentEngine, ContextEngine, RuntimePlanner, RuntimeExecutionGraphBuilder,
+PipelineRegistryBridge, RuntimeExecutionEngine, SkillOrchestratorBridge,
+ObservationEngineBridge, VerificationEngineBridge, RecoveryEngineBridge,
+MemoryUpdateBridge, AgentRuntime
+```
+
+### Agent Runtime Pipeline
+
+```text
+User Request
+      │
+      ▼
+IntentEngine          (classify intent + risk)
+      │
+      ▼
+ContextEngine         (gather environment + memory + resources)
+      │
+      ▼
+RuntimePlanner        (create plan with steps)
+      │
+      ▼
+RuntimeExecutionGraphBuilder  (build graph with auto-approval nodes)
+      │
+      ▼
+PipelineRegistryBridge (register pipeline)
+      │
+      ▼
+RuntimeExecutionEngine (execute graph nodes)
+      │
+      ▼
+SkillOrchestratorBridge (orchestrate skills)
+      │
+      ▼
+ObservationEngineBridge (observe execution)
+      │
+      ▼
+VerificationEngineBridge (verify result)
+      │
+      ▼
+RecoveryEngineBridge  (recover on failure)
+      │
+      ▼
+MemoryUpdateBridge    (store in long-term memory)
+      │
+      ▼
+Completed
+```
+
+### Agent Runtime Capabilities
+
+| Utility | Purpose |
+|---------|---------|
+| `IntentEngine` | Classify user request into intent + risk level using regex patterns |
+| `ContextEngine` | Gather environment, memory, and resource context for the request |
+| `RuntimePlanner` | Create execution plan with typed steps (observe, act, verify, finish) |
+| `RuntimeExecutionGraphBuilder` | Build execution graph with auto-inserted approval nodes for risk >= 3 |
+| `PipelineRegistryBridge` | Register and lookup pipelines by name or capability |
+| `RuntimeExecutionEngine` | Execute graph nodes and record results in history |
+| `SkillOrchestratorBridge` | Orchestrate skills based on intent with auto-selection |
+| `ObservationEngineBridge` | Record observations with timestamps for each stage |
+| `VerificationEngineBridge` | Verify execution results with pass/fail status |
+| `RecoveryEngineBridge` | Classify failures and apply recovery policies (retry/abort/rollback/replan) |
+| `MemoryUpdateBridge` | Store execution results in long-term memory with tags |
+| `AgentRuntime` | Orchestrate all 11 stages end-to-end via `processRequest()` |
+
+### Intent Patterns
+
+```text
+browser_open    - "open chrome|edge|firefox|browser"     (risk: 1)
+browser_search  - "search <query>"                       (risk: 1)
+browser_close   - "close chrome|edge|firefox|browser"    (risk: 1)
+file_delete     - "delete [file] <path>"                  (risk: 3)
+file_move       - "move <src> to <dst>"                   (risk: 2)
+file_list       - "list files|directory"                  (risk: 0)
+system_status   - "check status|system|memory|disk"      (risk: 0)
+auth_login      - "login [to] <site>"                     (risk: 3)
+download_file   - "download <url>"                        (risk: 2)
+system_run      - "run <command>"                         (risk: 4)
+```
+
+### Recovery Policies
+
+```text
+timeout      -> retry (3 attempts)
+network      -> retry (5 attempts)
+permission   -> abort
+validation   -> abort
+crash        -> rollback
+not_found    -> replan
+unknown      -> retry (1 attempt)
+```
+
+### Native C++ Hooks (Op Codes 130-133)
+
+```text
+130 = compute_stage_priority       # base priority by stage - age decay (0-100)
+131 = hash_runtime_request         # djb2 hash for request dedup
+132 = compute_runtime_relevance    # token overlap score (0-100)
+133 = compute_stage_transition_cost # 10 for natural flow, 50 for skip, 90 for loop
+```
+
+### JS Fallbacks
+
+When the native addon is absent, every method falls back to pure-JS:
+
+- `computeStagePriority` → base priority by stage name minus age decay
+- `hashRuntimeRequest` → djb2 hash returning `rt_<hex>`
+- `computeRuntimeRelevance` → token overlap percentage
+- `computeStageTransitionCost` → 10 for natural flow, 50 for skip, 90 for loop
+
+### Verified
+
+```powershell
+node -c pipeline\screenai_pipelines.js
+# syntax OK
+
+node pipeline\test_pipeline.js
+# Results: 43/43 passed, 0 failed
+
+node pipeline\test_agent_runtime.js
+# Agent Runtime regression passed
+```
+
+### Integration Pattern
+
+```javascript
+// 1. Create an AgentRuntime instance
+const runtime = new AgentRuntime();
+
+// 2. Process a user request end-to-end
+const result = runtime.processRequest({ text: 'open chrome' });
+// result.intent, result.context, result.plan, result.graph,
+// result.execution, result.orchestration, result.observation,
+// result.verification, result.memory, result.stages, result.status
+
+// 3. Use individual stages
+const intent = runtime.intentEngine.classify('delete file foo.txt');
+// { name: 'file_delete', risk: 3, confidence: 0.9, ... }
+
+const context = runtime.contextEngine.gather({ text: 'open chrome', intent });
+// { timestamp, request, intent, environment, memory, resources }
+
+const plan = runtime.planner.createPlan(intent, context);
+// { intent, risk, steps: [...], context, createdAt }
+
+const graph = runtime.executionGraph.build(plan.steps);
+// { nodes: [...], edges: [...], createdAt }
+// Note: auto-inserts approval nodes before risk >= 3 actions
+
+// 4. Register and execute pipelines
+runtime.pipelineRegistry.register('my_pipeline', { steps: ['a', 'b'] });
+const execution = runtime.executionRuntime.execute(graph);
+
+const orchestration = runtime.skillOrchestrator.orchestrate({ intent: 'browser_open' });
+const observation = runtime.observationEngine.observe({ stage: 'runtime', data: execution });
+const verification = runtime.verificationEngine.verify({ stage: 'runtime', observation });
+const recovery = runtime.recoveryEngine.recover({ stage: 'runtime', error: 'timeout' });
+const memory = runtime.memoryUpdate.update({ stage: 'runtime', result: execution });
+
+// 5. Use the global instance
+const result = globalAgentRuntime.processRequest({ text: 'check status' });
+```

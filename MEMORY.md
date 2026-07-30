@@ -61,8 +61,21 @@ Model roles:
 
 ## Current Status
 
+Updated: 2026-07-30 20:54:57 +05:30
+
 ### ✅ Working
 
+- FastAPI backend with `/runtime`, `/command`, `/command/preview`
+- Mobile web remote with pairing, command send, preview, history, approvals
+- Inline command-screen approval buttons for pending risky actions
+- Execution graph preview for observe/act/verify/finish pipelines
+- Plan-to-action controls from preview:
+  - low risk: `Send this plan`
+  - approval gated: `Approve and send`
+  - lab low risk: `Run Low-Risk Plan`
+- Browser Model Lab at `/remote/lab.html`
+- Shared frontend API client (`api.js`) and UI helpers (`ui.js`)
+- Pytest-safe backend test suite using isolated DB paths where needed
 - Screen scanning (UIA + OpenCV)
 - Click-by-text execution
 - Screenshot capture
@@ -71,17 +84,16 @@ Model roles:
 
 ### 🚧 In Progress
 
-- FastAPI server
-- Mobile web remote
-- Pairing system
-- File tools with quarantine
+- More robust command decomposition for long multi-app workflows
+- Better verification after tool execution
+- Real model artifact loading and low-RAM scheduling refinements
 
 ### 📋 Planned
 
-- Password vault
 - Passkey flow
-- Browser tools
-- Local LLM routing
+- Deeper browser research collection
+- More local LLM planner coverage
+- AMD ROCm demo packaging
 
 ## File Structure (Critical Files)
 
@@ -810,4 +822,108 @@ Note:
 
 **Last Updated**: 2026-07-24 21:28:08 +05:30
 **Version**: 1.3.7
+**Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-30 21:01:51 +05:30
+
+Focus: make the latest run-memory/Phase 17 changes durable and testable instead of relying on a temporary audit file.
+
+Added:
+
+- `pipeline/test_agent_runtime.js` permanent runtime regression test.
+- Checks for `IntentEngine`, `AgentRuntime`, `globalAgentRuntime`, string/object intent input, low-risk execution, high-risk approval insertion, and runtime memory/history.
+
+Corrected:
+
+- `pipeline/screenai_pipelines.js` now auto-detects the real app layout at `ai_pc_operator/` and routes `BACKEND`, `FRONTEND`, `DATA`, and `DOCS` there.
+- `build-frontend` now builds from `ai_pc_operator/frontend` and reports `13 files copied, 0 errors`.
+- `.gitignore` now excludes generated frontend build output at `ai_pc_operator/frontend/dist/` and legacy `frontend/dist/`.
+- `AGENTS.md` no longer references deleted `_test_tmp/phase17_audit.js`; it references `pipeline/test_agent_runtime.js`.
+
+Validated:
+
+- `node --check pipeline/screenai_pipelines.js`: pass.
+- `node --check pipeline/engine.js`: pass.
+- `node --check pipeline/operations.js`: pass.
+- `node --check pipeline/cli.js`: pass.
+- `node pipeline/test_pipeline.js`: 43/43 passed.
+- `node pipeline/test_agent_runtime.js`: pass.
+- `node --check ai_pc_operator/frontend/api.js`: pass.
+- `node --check ai_pc_operator/frontend/app.js`: pass.
+- `node --check ai_pc_operator/frontend/ui.js`: pass.
+- `node --check ai_pc_operator/frontend/sw.js`: pass.
+- `python -m pytest ai_pc_operator/backend -q`: 62 passed with isolated temp DB.
+
+Remaining:
+
+- Commit/push is still separate from this hardening pass unless explicitly requested.
+- The backend Flasgger warning is expected when optional Swagger dependencies are absent.
+
+**Last Updated**: 2026-07-30 21:01:51 +05:30
+**Version**: 1.3.8
+**Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-30 21:07:08 +05:30
+
+Focus: move beyond "tests pass" and verify real command execution paths.
+
+Fixed:
+
+- `ai_pc_operator/backend/app/main.py` `RedactingFilter` now redacts string log fields only and preserves non-string logging arguments.
+- This prevents logging formatter crashes when libraries log numeric args, for example HTTP status codes with `%d`.
+
+Runtime verified with a fresh isolated FastAPI app:
+
+- `POST /command` with `show system status`: 200 OK, executed `system.status`.
+- `POST /command/preview` with `open gx browser`: 200 OK, planned `system.open_app`.
+- `POST /command/preview` with `open chrome and search screen ai hackathon`: 200 OK, planned browser launch with search URL.
+
+Operational note:
+
+- A live server already running on port `8000` may still have old code loaded. Restart with `ai_pc_operator/stop.bat` and `ai_pc_operator/start.bat` before judging the browser UI.
+- Direct PID restart/background launch was blocked by the current Codex execution policy, so the verification used the real app code in-process with a temp DB.
+
+**Last Updated**: 2026-07-30 21:07:08 +05:30
+**Version**: 1.3.9
+**Maintainer**: Screen-AI Team
+
+## Latest Run Memory: 2026-07-30 21:15:07 +05:30
+
+Focus: make the large `pipeline/screenai_pipelines.js` file runnable as an agent-planning runtime.
+
+Added:
+
+- `node pipeline/cli.js agent <text...>` command.
+- Native C++ op coverage for event helpers `70-73` and memory helpers `80-83`.
+
+Fixed:
+
+- `ExecutionGraphRunner` inserts approval nodes before validating high-risk graphs.
+- Graph CLI validates the executable post-approval graph shape.
+- Phase 17 runtime history now uses `executions` internally and exposes `history()`.
+- Phase 17 verification reads nested execution status correctly.
+- AgentRuntime native helpers now call runtime ops `130-133`.
+- Native C++ `VerifyResult` duplicate definition and duplicate verifier export issues are resolved.
+- Windows native build links `iphlpapi` and `psapi`.
+
+Runtime verified:
+
+- `node pipeline/cli.js agent open chrome --dry-run --auto-approve`: completed.
+- `node pipeline/cli.js agent delete file C:\Temp\danger.txt --dry-run --auto-approve`: approval inserted, completed.
+- `node pipeline/cli.js agent run whoami --dry-run --auto-approve`: risk 4 approval inserted, completed.
+- Direct high-risk `ExecutionGraphRunner` run: approval node inserted, completed.
+
+Native verified:
+
+- `g++` compiled `hackathon_ui_operator_distill/native/screenai_core.cpp` plus `verifier_bridge.cpp`.
+- Output artifact: `ai_pc_operator/data/native/screenai_core_native.dll`.
+- `node pipeline/cli.js run build-native`: 2 command(s), 0 errors.
+
+Important:
+
+- The native DLL is a plain ABI artifact. JS still uses fallbacks because no Node N-API binding exists yet.
+- Add a Node binding that exposes `call(op, input)` before expecting `NativeBridge.isAvailable()` to become true.
+
+**Last Updated**: 2026-07-30 21:15:07 +05:30
+**Version**: 1.4.0
 **Maintainer**: Screen-AI Team

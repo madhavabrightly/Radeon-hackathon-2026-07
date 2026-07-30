@@ -5,13 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Screen-AI Remote</title>
     <meta name="description" content="Screen-AI — Control your PC from your phone">
-    <meta name="theme-color" content="#3b82f6">
+    <meta name="theme-color" content="#00d4a8">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="ScreenAI">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="stylesheet" href="styles.css">
+    <script>
+        // Apply persisted theme before paint to avoid flash
+        try {
+            var t = localStorage.getItem('screen_ai_theme');
+            if (t) document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+    </script>
 </head>
 <body>
     <div id="app">
@@ -90,7 +97,10 @@
                         </div>
                     </div>
                 </div>
-                <button id="emergency-stop" class="emergency-btn">STOP</button>
+                <div class="header-actions">
+                    <button id="theme-toggle" class="icon-btn" aria-label="Toggle theme" title="Toggle theme">◐</button>
+                    <button id="emergency-stop" class="emergency-btn">STOP</button>
+                </div>
             </div>
 
             <div class="tabs">
@@ -114,6 +124,7 @@
                         <div id="plan-preview" class="plan-preview hidden"></div>
                         <div id="command-memory" class="command-memory hidden"></div>
                         <div id="command-progress" class="progress-list hidden" aria-live="polite"></div>
+                        <div id="inline-approvals" class="inline-approvals hidden" aria-live="assertive"></div>
                         <div id="command-response" class="response"></div>
                     </div>
                     <div class="composer-panel">
@@ -170,7 +181,14 @@
         </div>
     </div>
 
+    <!-- Toast container (populated by ui.js) -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+    <!-- Modal container (populated by ui.js) -->
+    <div id="modal-container"></div>
+
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    <script src="api.js"></script>
+    <script src="ui.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

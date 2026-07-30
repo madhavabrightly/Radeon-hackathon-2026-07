@@ -6,7 +6,7 @@
  * Commands are saved as drafts only; they are never replayed automatically.
  * ================================================================ */
 
-const CACHE_VERSION = 'screenai-v3-lab-pet';
+const CACHE_VERSION = 'screenai-v7-plan-to-action';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 const OFFLINE_URL = '/remote/offline.html';
@@ -14,7 +14,9 @@ const OFFLINE_URL = '/remote/offline.html';
 const STATIC_ASSETS = [
   '/remote/index.html',
   '/remote/styles.css',
+  '/remote/api.js',
   '/remote/app.js',
+  '/remote/ui.js',
   '/remote/manifest.json',
   '/remote/login.html',
   '/remote/lab.html',
@@ -146,7 +148,7 @@ function openQueueDB() {
     const req = indexedDB.open(QUEUE_DB, 1);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
-      if (!db.objectStoreNames.contains('commands')) {
+      if (!db.objectStoreNames.contains('drafts')) {
         db.createObjectStore('drafts', { keyPath: 'id', autoIncrement: true });
       }
     };

@@ -1,5 +1,165 @@
 # Screen-AI Run Change Log
 
+## 2026-07-30 20:54:57 +05:30
+
+Purpose: turn previews into a real plan-to-action bridge while keeping approval gates intact.
+
+### Remote Command UI
+
+- Added action controls to plan previews:
+  - `Send this plan` for low-risk previews
+  - `Approve and send` for previews that require approval
+- The approval path does not bypass safety. It starts the command, then the backend pauses and the inline Approve/Reject card appears.
+- Preview now exposes the execution graph in the UI, making the observe/act/verify/finish pipeline visible.
+
+### Model Lab
+
+- Added `Run Low-Risk Plan` for previews that do not require approval.
+- High-risk lab previews now route to `Open Remote for Approval` instead of trying to execute from the preview-only lab.
+- Lab action controls preserve the existing preview-only explanation and cache-clear flow.
+
+### Cache / Runtime
+
+- Service worker cache bumped to `screenai-v7-plan-to-action`.
+- Backend was started and live endpoints were verified.
+
+### Verification
+
+```text
+node --check ai_pc_operator\frontend\api.js
+node --check ai_pc_operator\frontend\app.js
+node --check ai_pc_operator\frontend\ui.js
+node --check ai_pc_operator\frontend\sw.js
+python -m pytest ai_pc_operator\backend -q
+GET http://localhost:8000/runtime
+POST http://localhost:8000/command/preview open gx browser and go to youtube.com
+POST http://localhost:8000/command/preview delete files in downloads
+```
+
+Result:
+
+```text
+Frontend JS syntax checks passed
+62 backend tests passed
+/runtime returned 200
+browser_session risk 1 requires_approval=false
+delete_files risk 4 requires_approval=true
+```
+
+## 2026-07-30 15:58:05 +05:30
+
+Purpose: remove stale-cache confusion and clarify why approvals do not appear on the Model Lab preview page.
+
+### Model Lab
+
+- Added a `Clear Cache` button to `/remote/lab.html`.
+- Added `Remote` and `Links` buttons to the lab header.
+- Added an approval explanation panel:
+  - risk 1 previews show that no approval is needed
+  - high-risk previews explain that approval is created during real `Send`, not during preview
+- Lab JSON now includes the execution graph.
+
+### Cache
+
+- Service worker cache bumped to `screenai-v6-lab-cache-clear`.
+- In-app browser lab page was cache-busted and verified at:
+
+```text
+http://localhost:8000/remote/lab.html?v=screenai-v6-lab-cache-clear
+```
+
+### Verification
+
+```text
+node --check ai_pc_operator\frontend\sw.js
+POST http://localhost:8000/command/preview delete files in downloads
+Browser verification for risk 1 and risk 4 lab previews
+```
+
+Result:
+
+```text
+risk 1 browser_session: lab says no approval needed
+risk 4 delete_files: lab says approval will be required during Send
+```
+
+## 2026-07-30 15:47:25 +05:30
+
+Purpose: make approval feel like a real desktop-agent control flow instead of hiding it in a separate tab.
+
+### Approval UI
+
+- Added an inline approval surface in the command chat stream.
+- When a command creates a pending approval, the UI now polls pending approvals and renders **Approve** / **Reject** buttons on the same screen.
+- Approval results are echoed back into the chat thread so the user sees that the agent is continuing or rejected.
+- The existing Approvals tab still works.
+
+### Command Pipeline
+
+- Increased `/command` request timeout from 30 seconds to 310 seconds so the frontend can survive the backend's 5-minute approval wait.
+- Preview now renders the execution graph nodes so users can see the observe/act/verify/finish pipeline.
+- Service worker cache bumped to `screenai-v5-inline-approval`.
+
+### Verification
+
+```text
+node --check ai_pc_operator\frontend\api.js
+node --check ai_pc_operator\frontend\app.js
+node --check ai_pc_operator\frontend\ui.js
+node --check ai_pc_operator\frontend\sw.js
+python -m pytest ai_pc_operator\backend -q
+GET http://localhost:8000/runtime
+POST http://localhost:8000/command/preview
+```
+
+Result:
+
+```text
+Frontend JS syntax checks passed
+62 backend tests passed
+/runtime returned 200
+delete files in downloads preview returned requires_approval=true
+```
+
+## 2026-07-30 15:05:29 +05:30
+
+Purpose: fix the browser model lab `Preview failed: Failed to fetch` issue and stabilize the new backend test/spec updates.
+
+### Preview / Frontend
+
+- Updated `ai_pc_operator/frontend/lab.html` to use the shared `ScreenAI.api` client.
+- Added a fallback direct preview request for `file://` mode.
+- Replaced raw `Failed to fetch` with a clear backend-not-reachable message that tells the user to start `ai_pc_operator\start.bat`.
+- Updated `ai_pc_operator/frontend/sw.js` cache version and added the refactored `api.js` and `ui.js` assets.
+- Fixed service-worker offline draft IndexedDB store creation (`drafts` vs `commands` mismatch).
+
+### Backend / Tests
+
+- Added `SCREEN_AI_DB_PATH` support in `app/db/database.py` so tests can use isolated SQLite files instead of locking the live agent database.
+- Converted `test_login_v2.py` into a pytest-safe wrapper around its async pairing flow.
+- Converted `test_new_spec.py` into a pytest-visible integration test and moved it to a temp database.
+
+### Verification
+
+```text
+python -m pytest ai_pc_operator\backend -q
+node --check ai_pc_operator\frontend\sw.js
+node --check ai_pc_operator\frontend\api.js
+node --check ai_pc_operator\frontend\app.js
+Invoke-RestMethod http://localhost:8000/command/preview
+Browser lab Preview button on http://localhost:8000/remote/lab.html
+```
+
+Result:
+
+```text
+62 backend tests passed
+Frontend JS syntax checks passed
+Live /runtime returned 200
+Live /command/preview returned browser_session plan
+Model Lab Preview button rendered system.open_app + keep_awake + mouse_jiggle
+```
+
 ## 2026-07-25 17:55:31 +05:30
 
 Purpose: turn the inspected local model reports into real runtime routing and visible phone-side intelligence.
@@ -800,3 +960,122 @@ cmd /c fc relation-map.md ai_pc_operator/relation-map.md : no differences
 
 - Offline commands are saved as drafts only. They require the user to reconnect and press `Send`.
 - The Windows shell prints a stray environment message after `build.bat`, but the build succeeds and exits `0`.
+
+## 2026-07-30 21:01:51 +05:30
+
+Purpose: harden the latest run-memory/Phase 17 work so the committed pipeline and app layers verify cleanly.
+
+### Changes
+
+- Added `pipeline/test_agent_runtime.js` as a permanent Agent Runtime regression check.
+- Covered runtime exports, string/object intent parsing, low-risk execution, high-risk approval-node insertion, and runtime memory/history recording.
+- Fixed `pipeline/screenai_pipelines.js` project path detection so pipelines use `ai_pc_operator/frontend`, `ai_pc_operator/backend`, `ai_pc_operator/data`, and `ai_pc_operator/docs` when this app layout exists.
+- Confirmed `build-frontend` now copies the real live UI files and reports `13 files copied, 0 errors` instead of the misleading legacy-root `1 error`.
+- Ignored generated frontend build output at `ai_pc_operator/frontend/dist/` and legacy `frontend/dist/`.
+- Updated `AGENTS.md` to point at the permanent runtime regression test instead of the deleted temporary audit script.
+
+### Verification
+
+```text
+node --check pipeline/screenai_pipelines.js : pass
+node --check pipeline/engine.js : pass
+node --check pipeline/operations.js : pass
+node --check pipeline/cli.js : pass
+node pipeline/test_pipeline.js : 43/43 passed, 0 failed
+node pipeline/test_agent_runtime.js : pass
+node --check ai_pc_operator/frontend/api.js : pass
+node --check ai_pc_operator/frontend/app.js : pass
+node --check ai_pc_operator/frontend/ui.js : pass
+node --check ai_pc_operator/frontend/sw.js : pass
+python -m pytest ai_pc_operator/backend -q : 62 passed
+```
+
+### Notes
+
+- Backend pytest used an isolated `SCREEN_AI_DB_PATH` temp database so local SQLite state cannot hide regressions.
+- The Flasgger warning is non-blocking; the backend falls back to the static landing page when Flasgger is not installed.
+
+## 2026-07-30 21:07:08 +05:30
+
+Purpose: fix real command execution, not just static checks.
+
+### Changes
+
+- Fixed `RedactingFilter` in `ai_pc_operator/backend/app/main.py` so log redaction preserves non-string logging arguments.
+- This prevents formatter crashes such as `%d format: a real number is required, not str` from HTTP/access logs while still redacting string secrets.
+
+### Runtime Verification
+
+Used a fresh in-process FastAPI app with an isolated temp SQLite DB to avoid the stale live server on port `8000`.
+
+```text
+POST /command {"text":"show system status"} : 200 OK
+POST /command/preview {"text":"open gx browser"} : 200 OK
+POST /command/preview {"text":"open chrome and search screen ai hackathon"} : 200 OK
+```
+
+Observed working behavior:
+
+```text
+show system status -> intent system_status, risk 0, system.status executed
+open gx browser -> browser_session plan with system.open_app
+open chrome and search screen ai hackathon -> browser_session plan with Google search target URL
+```
+
+### Notes
+
+- The already-running server on port `8000` may still have old code loaded until restarted.
+- The environment blocked direct PID restart/background server launch in this run, so restart with `ai_pc_operator/stop.bat` then `ai_pc_operator/start.bat` to load the fix on the normal port.
+
+## 2026-07-30 21:15:07 +05:30
+
+Purpose: make the 30k-line pipeline usable as an agent-planning runtime, not just a library.
+
+### Changes
+
+- Added `pipeline cli agent <text...>` to run text through `AgentRuntime`, build a runtime graph, and execute it through `ExecutionGraphRunner`.
+- Fixed `ExecutionGraphRunner` so high-risk nodes get approval nodes inserted before validation.
+- Fixed graph CLI validation to validate the post-approval executable graph shape.
+- Fixed Phase 17 runtime history naming and verification status handling.
+- Pointed AgentRuntime native helpers at Phase 17 native ops (`130-133`) instead of event/memory helper aliases.
+- Added native C++ Phase 10/11 op implementations:
+  - `70-73`: event timestamp, event id, event hash, event priority
+  - `80-83`: memory relevance, memory key hash, memory TTL, cleanup priority
+- Fixed native C++ duplicate `VerifyResult`/`screenai_verify` symbols and Windows linker libraries.
+- Updated `build-native` to compile the real C++ core from `hackathon_ui_operator_distill/native`.
+- Ignored generated native binary outputs under `ai_pc_operator/data/native/`.
+
+### Runtime Verification
+
+```text
+node pipeline/cli.js agent open chrome --dry-run --auto-approve
+-> intent browser_open, risk 1, graph completed
+
+node pipeline/cli.js agent delete file C:\Temp\danger.txt --dry-run --auto-approve
+-> intent file_delete, risk 3, approval inserted, graph completed
+
+node pipeline/cli.js agent run whoami --dry-run --auto-approve
+-> intent system_run, risk 4, approval inserted, graph completed
+```
+
+### Native Verification
+
+```text
+g++ -shared -std=c++17 -O3 -DSCREENAI_NO_VERIFIER_EXPORTS ...
+-> ai_pc_operator/data/native/screenai_core_native.dll produced
+
+node pipeline/cli.js run build-native
+-> 2 command(s), 0 errors
+```
+
+Artifact:
+
+```text
+ai_pc_operator/data/native/screenai_core_native.dll
+```
+
+### Notes
+
+- The compiled C++ artifact is a plain native ABI DLL, not a Node N-API addon.
+- `NativeBridge.isAvailable()` remains false until a Node binding exposing `call(op,input)` is added.
+- The JS pipeline is fully usable through fallbacks, and the C++ artifact is ready for a future binding layer.

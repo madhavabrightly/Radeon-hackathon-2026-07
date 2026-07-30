@@ -24,9 +24,15 @@ ai_pc_operator/data/certs/
 ai_pc_operator/data/models/*_INSPECTION.txt
 ai_pc_operator/data/models/*_DEEP_REPORT.txt
 ai_pc_operator/data/models/teachers/*_INSPECTION.txt
+ai_pc_operator/data/native/*.dll
+ai_pc_operator/data/native/*.so
+ai_pc_operator/data/native/*.dylib
+ai_pc_operator/data/native/*.node
 ai_pc_operator/backend/.installed
+ai_pc_operator/frontend/dist/
 ai_pc_operator/frontend/links.runtime.js
 ai_pc_operator/ai_pc_operator/
+frontend/dist/
 hackathon_ui_operator_distill/data/raw_screenshots/*.png
 hackathon_ui_operator_distill/data/raw_screenshots/*.jpg
 hackathon_ui_operator_distill/data/raw_screenshots/*.jpeg
