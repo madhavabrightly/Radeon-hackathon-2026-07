@@ -122,10 +122,13 @@ Screen-AI/
 │   │   │   │   ├── __init__.py
 │   │   │   │   ├── router.py              # Core command pipeline (classify→risk→plan→execute)
 │   │   │   │   ├── planner.py             # Rule-based intent classification + action planning
+│   │   │   │   ├── external_planner.py    # OpenAI-compatible external reasoning (env-var key)
 │   │   │   │   ├── llm_planner.py         # LLM-assisted planning (uses prompts.py)
-│   │   │   │   ├── task_planner.py        # Multi-step desktop task decomposition
+│   │   │   │   ├── task_planner.py        # Multi-step task decomposition + compound sequence planner
+│   │   │   │   ├── graph_schema.py        # Execution-graph schema (pipeline/models/verify_goal)
+│   │   │   │   ├── intent_engine/         # 6-stage intent pipeline + typed entity extraction
 │   │   │   │   ├── memory.py              # Short-term (last 100) + long-term (SQLite) memory
-│   │   │   │   └── prompts.py             # System + user prompt templates for LLM
+│   │   │   │   └── prompts.py             # System + user + chat prompt templates for LLM
 │   │   │   │
 │   │   │   ├── approvals/                 # ── APPROVAL SYSTEM ──
 │   │   │   │   ├── __init__.py
@@ -184,7 +187,12 @@ Screen-AI/
 │   │   │
 │   │   ├── test_basic.py                  # Core functionality tests
 │   │   ├── test_login_v2.py               # Pairing V2 + vault tests
-│   │   └── test_strategy.py               # Strategy engine tests
+│   │   ├── test_strategy.py               # Strategy engine tests
+│   │   ├── test_cognitive_planner.py      # Cognitive planner v1.0 tests
+│   │   ├── test_v2_external_chat_camera.py # OS v2.0 tests
+│   │   ├── test_task_execution_policy.py  # Task policy 10-phase tests
+│   │   ├── test_generic_task_decomposition.py # Generic decomposition tests
+│   │   └── test_compound_sequence.py      # Compound command planner tests
 │   │
 │   ├── frontend/                          # ── MOBILE REMOTE UI ──
 │   │   ├── index.html                     # Main control panel
@@ -374,14 +382,17 @@ frontend/sw.js
 
 | File | Class/Functions | Purpose | Key Dependencies |
 |------|----------------|---------|------------------|
-| `router.py` | `Router` | Core pipeline: classify→risk→plan→approve→execute→respond | All tools, planner, risk, permissions, approvals, memory, strategy, telemetry |
-| `planner.py` | `Planner` | Rule-based intent classification (regex patterns → intent + risk + tool plan) | None (standalone) |
-| `llm_planner.py` | `llm_plan()` | LLM-assisted planning using prompt templates | `prompts.py` |
-| `task_planner.py` | `TaskPlanner` | Multi-step desktop command decomposition (regex) | None (standalone) |
+| `router.py` | `AgentRouter` | Core pipeline: classify→risk→plan→approve→execute→respond; statuses, goal, cognitive_plan, chat mode | All tools, planner, external_planner, task_planner, risk, permissions, approvals, memory, strategy, telemetry |
+| `planner.py` | `Planner` | Rule-based intent classification (regex patterns → intent + risk + tool plan); `classify_intent_sync`/`create_plan_sync` twins; cognitive pipeline | None (standalone) |
+| `external_planner.py` | `ExternalPlanner` | OpenAI-compatible external reasoning (DeepSeek-V4-Flash, AMD Radeon API); env-var key only; advisory plans + chat replies | `prompts.py`, stdlib urllib |
+| `llm_planner.py` | `LLMPlanner` | LLM-assisted planning using prompt templates | `prompts.py` |
+| `task_planner.py` | `TaskPlanner` | Multi-step desktop command decomposition; generic `_plan_multi_intent_sequence` (compound commands), `_plan_send_file` (entity-driven), `extract_entities()` | `planner.py`, `intent_engine.entity_extractor` |
+| `intent_engine/` | `IntentEngine`, `EntityExtractor` | 6-stage intent pipeline; typed entity extraction (PATH/URL/FILE/APP/SITE/CONTACT/CHANNEL/...) | None (standalone) |
+| `graph_schema.py` | `plan_to_graph`, `ExecutionNode` | Execution-graph schema; per-node pipeline/models; `verify_goal` node | `planner.py` (lazy) |
 | `memory.py` | `Memory` | Short-term (list, last 100) + long-term (SQLite) command memory | `db.database` |
-| `prompts.py` | `SYSTEM_PROMPT`, `USER_PROMPT_TEMPLATE` | LLM prompt templates | None (constants) |
+| `prompts.py` | `SYSTEM_PROMPT`, `USER_PROMPT_TEMPLATE`, `CHAT_SYSTEM_PROMPT` | LLM prompt templates | None (constants) |
 
-**Router class methods**: `process_command()`, `preview_plan()`, `_execute_tool()`, `_write_plan_cache()`, `_prefetch_hot_tools()`
+**Router class methods**: `process_command()`, `preview_plan()`, `_execute_tool()`, `_build_cognitive_plan()`, `_build_execution_graph()`, `_chat_reply()`, `_rule_chat_reply()`, `_derive_goal()`, `_step_status()`, `_write_plan_cache()`, `_prefetch_hot_tools()`
 
 ### 5.2 TOOL LAYER
 
@@ -470,39 +481,46 @@ User types command on phone/PC
 │  2. redactor.redact() → sanitize input for logging       │
 │  3. router.process_command(text, device_id)              │
 │     │                                                     │
-│     ├─ Step 1: _classify_intent(text)                     │
-│     │   ├─ Try task_planner.decompose() for multi-step   │
-│     │   ├─ Try planner.classify(text) for rule-based     │
-│     │   └─ Fallback: llm_planner.llm_plan(text) if LLM   │
+│     ├─ Step 1: classify intent                              │
+│     │   ├─ Try task_planner.plan() for compound plans:      │
+│     │   │   ├─ Named patterns (research, session, settings, │
+│     │   │   │   keep_awake, send_file)                      │
+│     │   │   └─ Generic _plan_multi_intent_sequence (split,  │
+│     │   │       classify each segment, chain steps)         │
+│     │   ├─ Try planner.classify_intent() for rule-based     │
+│     │   └─ Fallback: external_planner.create_plan() if      │
+│     │       intent unknown + key configured (advisory)      │
 │     │                                                     │
-│     ├─ Step 2: _assess_risk(intent, text)                 │
-│     │   ├─ risk.classify(text) → risk_level              │
-│     │   └─ permissions.needs_approval(intent, risk)      │
+│     ├─ Step 2: _assess_risk(intent, text)                   │
+│     │   ├─ risk.classify(text) → risk_level                │
+│     │   └─ permissions.needs_approval(intent, risk)        │
 │     │                                                     │
-│     ├─ Step 3: _plan_actions(intent, text)                │
-│     │   ├─ planner.plan(intent, text) → tool_steps       │
-│     │   ├─ heatmap.hot_tools(intent) → prefer known paths│
-│     │   └─ strategy.get_prefetch_list(intent) → warm up  │
+│     ├─ Step 3: _plan_actions(text, intent)                  │
+│     │   ├─ _build_cognitive_plan() → steps + cognitive_plan│
+│     │   ├─ heatmap.hot_tools(intent) → prefer known paths  │
+│     │   └─ strategy.get_prefetch_list(intent) → warm up    │
 │     │                                                     │
-│     ├─ Step 4: If needs_approval:                         │
-│     │   ├─ approval_manager.create_approval_request()     │
-│     │   ├─ Wait for phone approval (poll WebSocket)       │
-│     │   └─ If rejected → return rejection                 │
+│     ├─ Step 4: If needs_approval:                           │
+│     │   ├─ approval_manager.create_approval_request()       │
+│     │   ├─ Wait for phone approval (poll WebSocket)         │
+│     │   └─ If rejected → return rejection                   │
 │     │                                                     │
-│     ├─ Step 5: _execute_plan(steps)                       │
-│     │   ├─ For each step: strategy.execute_with_strategy()│
-│     │   │   ├─ CircuitBreaker.is_available(tool)          │
-│     │   │   ├─ execute_fn(tool_name, args)                │
-│     │   │   │   └─ Dispatch to system/file/browser/      │
-│     │   │   │      screen/auth/download tool              │
-│     │   │   ├─ Record success/failure                     │
-│     │   │   └─ AdaptiveRetry on transient failures        │
-│     │   └─ telemetry.record_tool_call() for each          │
+│     ├─ Step 5: _execute_plan(steps)                         │
+│     │   ├─ statuses.append(_step_status(tool, args))        │
+│     │   ├─ For each step: strategy.execute_with_strategy()  │
+│     │   │   ├─ CircuitBreaker.is_available(tool)            │
+│     │   │   ├─ execute_fn(tool_name, args)                  │
+│     │   │   │   └─ Dispatch to system/file/browser/        │
+│     │   │   │      screen/auth/download tool                │
+│     │   │   ├─ Record success/failure                       │
+│     │   │   └─ AdaptiveRetry on transient failures          │
+│     │   └─ telemetry.record_tool_call() for each            │
 │     │                                                     │
-│     └─ Step 6: Return result                              │
-│         ├─ memory.add_to_history()                        │
-│         ├─ telemetry._record_completion()                 │
-│         └─ Update DB status (completed/error)             │
+│     └─ Step 6: Return result (with statuses, goal,          │
+│         execution_graph incl. verify_goal, cognitive_plan)  │
+│         ├─ memory.add_to_history()                          │
+│         ├─ telemetry._record_completion()                   │
+│         └─ Update DB status (completed/partial/chat)        │
 │                                                             │
 └───────────────────────────────────────────────────────────┘
          │
@@ -786,8 +804,13 @@ main.py ────────→ commands, approvals (status endpoints)
 | `test_basic.py` | Core functionality | `risk.py`, `permissions.py`, `file_tools.py`, `system_tools.py`, `download_tools.py`, `browser_tools.py`, `planner.py`, `router.py`, `vault.py`, `pairing.py`, `telemetry.py`, `strategy.py`, `model_registry.py`, `ssd_tier.py`, `heatmap.py`, `resource_budget.py`, `tier_manager.py`, `io_pool.py`, `screen_cache.py`, `native_bridge.py`, `artifact_store.py`, `redactor.py`, `task_planner.py` |
 | `test_login_v2.py` | Pairing V2 + vault | `pairing_v2.py`, `vault.py` |
 | `test_strategy.py` | Strategy engine | `strategy.py` (CircuitBreaker, IntentMemory, AdaptiveRetry) |
+| `test_cognitive_planner.py` | Cognitive planner v1.0 | `planner.py`, `screen_tools.py` (browser_open intent, aliases, semantic OCR, cognitive plan) |
+| `test_v2_external_chat_camera.py` | OS v2.0 | `external_planner.py`, `router.py` (chat), `system_tools.py` (camera), `planner.py` |
+| `test_task_execution_policy.py` | Task policy 10 phases | `graph_schema.py`, `router.py` (statuses/goal), `task_planner.py` |
+| `test_generic_task_decomposition.py` | Generic decomposition | `task_planner.py`, `intent_engine/entity_extractor.py` (CONTACT/CHANNEL) |
+| `test_compound_sequence.py` | Compound command planner | `task_planner.py`, `planner.py` (sync twins, multi-intent split) |
 
-**Total**: 59 tests, all passing (3.66s)
+**Total**: 59 + 31 new-spec/cognitive/v2/policy/decomposition/compound tests, all passing
 
 ---
 

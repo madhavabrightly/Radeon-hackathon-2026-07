@@ -10,6 +10,8 @@ from typing import Any, Dict, List
 
 import pyautogui
 
+from app.agent.planner import semantic_ocr_match
+
 
 ROOT = Path(__file__).resolve().parents[4]
 SCANNER_DIR = ROOT / "screen_element_scanner"
@@ -144,7 +146,12 @@ class ScreenTools:
         words = [word for word in query.split() if word]
         if words and all(word in label for word in words):
             return 0.82
-        return SequenceMatcher(None, query, label).ratio()
+        # Semantic OCR match ("click Login" -> detected "Sign In")
+        semantic = semantic_ocr_match(query, label)
+        seq_ratio = SequenceMatcher(None, query, label).ratio()
+        if semantic >= 0.85:
+            return semantic
+        return max(seq_ratio, semantic)
 
     def _normalize(self, value: str) -> str:
         return " ".join(value.lower().strip().split())

@@ -50,6 +50,65 @@ RISK_LEVELS = {
 # Risk threshold above which an approval node must be inserted upstream.
 APPROVAL_REQUIRED_RISK = 3
 
+# Tool-prefix -> pipeline domain (Phase 3: pipeline orchestration).
+TOOL_PIPELINE = {
+    "system.": "application",
+    "app.": "application",
+    "file.": "filesystem",
+    "browser.": "browser",
+    "screen.": "screen",
+    "window.": "window",
+    "auth.": "authentication",
+    "terminal.": "terminal",
+    "dev.": "developer",
+    "ocr.": "ocr",
+    "vision.": "vision",
+    "clipboard.": "clipboard",
+    "email.": "email",
+    "network.": "network",
+    "media.": "media",
+    "doc.": "document",
+    "memory.": "memory",
+    "task.": "task",
+    "research.": "research",
+    "approval.": "approval",
+}
+
+
+def tool_pipeline(tool: str) -> str:
+    """Return the pipeline domain for a tool name (tool-prefix based)."""
+    for prefix, domain in TOOL_PIPELINE.items():
+        if tool.startswith(prefix):
+            return domain
+    return "system"
+
+
+def _models_for_tool(tool: str) -> List[str]:
+    """Return the model lanes a tool needs (Phase 4: model orchestration).
+
+    Lazily imports from the planner to avoid an import cycle (planner does
+    not import graph_schema at module load).
+    """
+    try:
+        from app.agent.planner import MODEL_REQUIREMENTS
+    except Exception:  # pragma: no cover - defensive
+        return []
+    # Best-effort: match the tool name to an intent in MODEL_REQUIREMENTS by
+    # stripping the category prefix (file.list -> file_list, etc.).
+    tool_key = tool.replace(".", "_")
+    if tool_key in MODEL_REQUIREMENTS:
+        return list(MODEL_REQUIREMENTS[tool_key])
+    # Fall back to a per-pipeline default
+    return {"application": ["app_detector"],
+            "filesystem": ["filesystem"],
+            "browser": ["browser_automation"],
+            "screen": ["ocr", "vision", "ui_detector"],
+            "ocr": ["ocr"],
+            "vision": ["vision", "ui_detector"],
+            "system": ["system_control"],
+            "authentication": ["vault", "ocr", "vision"],
+            }.get(tool_pipeline(tool), [])
+
 
 # ─── Data classes ────────────────────────────────────────────────────────────
 
@@ -231,11 +290,17 @@ def insert_approval_nodes(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 # ─── Plan → graph conversion ─────────────────────────────────────────────────
 
-def plan_to_graph(plan: Dict[str, Any], risk_level: int = 1) -> List[Dict[str, Any]]:
+def plan_to_graph(
+    plan: Dict[str, Any],
+    risk_level: int = 1,
+    goal: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Convert a legacy plan (with ``steps``) into an execution graph.
 
-    Each step becomes an ``act`` node. If the plan's risk is >= 3, an
-    approval node is auto-inserted upstream.
+    Each step becomes an ``act`` node with pipeline + model orchestration
+    metadata (Phase 3/4). A ``verify_goal`` node checks the user's objective
+    (Phase 10). If the plan's risk is >= 3, an approval node is auto-inserted
+    upstream.
     """
     steps = plan.get("steps", []) or []
     nodes: List[Dict[str, Any]] = []
@@ -255,7 +320,7 @@ def plan_to_graph(plan: Dict[str, Any], risk_level: int = 1) -> List[Dict[str, A
         "confidence": 0.95,
     })
 
-    # Act nodes — one per step
+    # Act nodes — one per step (with pipeline + model orchestration metadata)
     for i, step in enumerate(steps):
         tool = step.get("tool", f"step_{i}")
         nodes.append({
@@ -275,6 +340,8 @@ def plan_to_graph(plan: Dict[str, Any], risk_level: int = 1) -> List[Dict[str, A
             "risk": int(step.get("risk", risk_level)),
             "estimated_duration": int(step.get("estimated_duration", 5)),
             "confidence": float(step.get("confidence", 0.85)),
+            "pipeline": tool_pipeline(tool),
+            "models": _models_for_tool(tool),
         })
 
     # Verify node — checks all steps succeeded
@@ -292,8 +359,32 @@ def plan_to_graph(plan: Dict[str, Any], risk_level: int = 1) -> List[Dict[str, A
             "confidence": 0.95,
         })
 
+    # Goal-verification node — Phase 10: task is complete only when the
+    # user's objective is verified, not just when the tools ran.
+    if steps:
+        goal_text = goal or str(plan.get("intent") or "complete the request")
+        nodes.append({
+            "id": "verify_goal",
+            "type": "verify",
+            "objective": f"Verify goal achieved: {goal_text}",
+            "dependencies": ["verify_all"],
+            "verification": {
+                "method": "goal_achieved",
+                "success": "the user objective was completed",
+            },
+            "recovery": [
+                "Report partial progress to user",
+                "Re-run failed act node",
+                "Ask user for clarification",
+            ],
+            "risk": 0,
+            "estimated_duration": 1,
+            "confidence": 0.9,
+            "goal": goal_text,
+        })
+
     # Finish node
-    finish_deps = ["verify_all"] if steps else ["observe_plan"]
+    finish_deps = ["verify_goal"] if steps else ["observe_plan"]
     nodes.append({
         "id": "finish",
         "type": "finish",

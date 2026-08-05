@@ -237,7 +237,7 @@
             return post('/command/preview', {
                 text: text.trim(),
                 device_id: tokenStore.deviceId,
-            });
+            }, { timeoutMs: 60000 });
         },
 
         async emergencyStop() {

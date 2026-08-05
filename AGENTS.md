@@ -155,6 +155,43 @@ high risk preview -> Open Remote for Approval
 
 Do not add direct high-risk execution to the lab. High-risk commands must go through the Remote command screen so the pending approval card can be shown and resolved through the existing `/approvals/*` flow.
 
+## 2026-07-31 Lab Inline Approve Button Note
+
+The Model Lab (`lab.html`) now has an inline approve button surface so users can approve/reject commands directly from the lab page when they give a comment.
+
+### What changed
+
+- `lab.html` now shows an **Approve & Send** / **Approve & Run** button + **Reject** button right under every preview.
+- When the user clicks **Approve & Send**, the lab calls `/command` and starts polling `/approvals/pending` every 1.6s.
+- Pending approvals render as inline approval cards with **Approve** / **Reject** buttons that call `/approvals/resolve`.
+- The lab no longer redirects high-risk previews to Remote — the approval card appears inline.
+- Service worker cache version bumped to `screenai-v8-lab-approve-button` so users get the fresh lab.html on next reload.
+
+### New lab functions
+
+```text
+approveAndSend(text)       # sends command through /command, starts polling if approval needed
+rejectPlan(text)           # marks plan as rejected, stops polling
+startLabApprovalPolling()  # polls /approvals/pending every 1.6s
+stopLabApprovalPolling()   # clears the poll timer
+pollLabApprovals()         # fetches pending approvals
+resolveLabApproval(id, ok) # calls /approvals/resolve
+renderLabApprovalCards()   # renders inline approval cards with Approve/Reject buttons
+```
+
+### Safety rules still apply
+
+- The lab still does not bypass risk policy. High-risk commands still create real approval requests that must be resolved.
+- The lab still uses the same `/approvals/*` endpoints as Remote, so the approval flow is identical.
+- The lab still shows the preview before any action runs.
+
+### Verified
+
+```powershell
+curl.exe -s -X POST -H "Content-Type: application/json" -d '{"text":"delete file C:\\Temp\\danger.txt"}' --max-time 10 http://localhost:8000/command/preview
+# Returns: requires_approval: true, risk_level: 4
+```
+
 ## 2026-07-30 Pipeline Agent Runtime Note
 
 Use this command to exercise the large JS pipeline as an agent planner:
@@ -3106,4 +3143,145 @@ const memory = runtime.memoryUpdate.update({ stage: 'runtime', result: execution
 
 // 5. Use the global instance
 const result = globalAgentRuntime.processRequest({ text: 'check status' });
+```
+
+## 2026-07-31 Comprehensive Planner Note
+
+The planner (pp/agent/planner.py) was completely rewritten to be **fully system-aware**. It now knows the entire 30k+ line pipeline system, all backend files, all app/site aliases, and uses a 7-tier classification strategy.
+
+### Knowledge Base
+
+| Component | Count | Source |
+|-----------|-------|--------|
+| **PIPELINE_KNOWLEDGE** | 306 pipelines across 20 domains | pipeline/screenai_pipelines.js |
+| **PHASE_UTILITY_KNOWLEDGE** | 130 utilities across 13 phases | pipeline/screenai_pipelines.js |
+| **BACKEND_FILE_KNOWLEDGE** | 40 files across 9 modules | pp/ directory |
+| **SYNONYMS** | 126 entries | Built-in |
+| **APP_NAME_ALIASES** | 98 entries | Built-in |
+| **SITE_ALIASES** | 200+ sites | Built-in |
+| **Intent patterns** | 60+ intents | Built-in |
+
+### 7-Tier Classification Strategy
+
+The classify_intent() method uses a cascading strategy:
+
+1. **Exact memory match** — checks planner_memory.json for exact normalized text
+2. **Fuzzy memory match** — uses token overlap + SequenceMatcher ratio (threshold 0.78)
+3. **Synonym expansion + regex pattern match** — expands synonyms then matches against 60+ intent patterns
+4. **Pipeline knowledge base match** — matches against 306 pipeline graphs across 20 domains
+5. **Phase utility knowledge base match** — matches against 130 phase utilities
+6. **Token-overlap fuzzy match** — matches against known intent keywords
+7. **Default to "unknown"** — falls through to LLM planner if available
+
+### Key Pattern Reordering (this session)
+
+Patterns are ordered by specificity. More specific patterns come first:
+
+- close_all_apps before open_app — so "keep chrome open but close everything else" → close_all_apps
+- close_app before rowser_close — so "close chrome" → close_app (not rowser_close)
+- 	erminal_powershell / 	erminal_cmd before un_command — so "run powershell command" → 	erminal_powershell
+- dev_test / dev_run before 	erminal_run — so "run tests" → dev_test
+- mail_search before search_web — so "search email" → mail_search
+- esearch_collect before search_web — so "research AMD ROCm" → esearch_collect
+- 
+etwork_ping before search_web — so "ping google.com" → 
+etwork_ping
+
+### open_app Pattern (restricted)
+
+The open_app pattern was made more restrictive to avoid false positives:
+
+`python
+r"\b(open|launch|start|fire\s*up|boot|bring\s*up)\b.*\b(app|application|program|software)\b",
+r"\b(open|launch|start|fire\s*up|boot|bring\s*up)\b\s+\w+",
+r"\brun\s+(chrome|edge|firefox|opera|notepad|calc|excel|word|powerpoint|outlook|spotify|discord|slack|vscode|code|terminal|explorer|paint|wordpad|settings|camera|photos|movies|music|store|mail|calendar|clock|weather|maps|news|notes|todo|sticky|calculator)\b",
+`
+
+Note: "powershell" and "cmd" were removed from the open_app pattern since they're handled by 	erminal_powershell and 	erminal_cmd.
+
+### TaskPlanner Fix (this session)
+
+The TaskPlanner._plan_browser_session() was updated to only match compound browser/session tasks when there's extra context (keep-awake, mouse jiggle, duration, or explicit session keyword). Simple "open chrome" now falls through to the main planner and classifies as open_app.
+
+`python
+has_session_context = bool(
+    re.search(r"\b(session|awake|idle|sleep|prevent|stop)\b", lower)
+    or re.search(r"\b(mouse|cursor)\b.*\b(move|movement|jiggle|shake)\b", lower)
+    or re.search(r"\b\d+\s*(minute|minutes|hour|hours|min|hr|h)\b", lower)
+    or re.search(r"\bkeep\s+(browser|session|pc|computer)\b", lower)
+)
+if not has_session_context:
+    return None
+`
+
+### Memory Learning
+
+The planner learns from every command via planner.remember(text, intent) called in outer.py after intent classification. Memory is persisted to i_pc_operator/data/planner_memory.json.
+
+### Verified
+
+`powershell
+# Smoke test: 132/132 PASSED (100%)
+python _test_planner.py
+
+# HTTP batch test: 58/58 PASSED (100%)
+python _test_curl_batch.py
+`
+
+All commands classify correctly via both the direct planner API and the live HTTP server.
+`
+
+All commands classify correctly via both the direct planner API and the live HTTP server.
+
+## 2026-08-05 Four-Spec Agent Upgrade (Cognitive Planner, OS v2.0, Task Policy, Generic Decomposition)
+
+All changes are additive; no existing behavior removed. Full test suites green (see CHANG.md 2026-08-05).
+
+### Master Cognitive Planner v1.0
+
+- `browser_open` is a first-class intent: `Open/Launch/Run/Fire up/Bring up/Start Chrome` → `system.open_app`. Precedence: `open_website` (sites) → `browser_open` (browser apps) → `open_app` (generic apps). `open gx browser` still → `open_app` (negative lookahead).
+- `resolve_user_alias` is single-pass (cursor scan) so `vscode` → `visual studio code` never re-expands to double-`code`. Removed `chrome → google chrome` from USER_ALIASES.
+- `take me to` / `browse` added to navigate vocabulary; `take me to youtube` / `browse youtube` → `open_website`.
+- `screen_tools._score()` now calls `semantic_ocr_match` (login ↔ sign in = 0.95).
+- Router returns `cognitive_plan` in `/command` + `/command/preview`: intent, entities, execution_graph, pipelines, models, dependencies, verification_steps, recovery_plan, confidence_score, risk_score, canonical_actions, wait_strategies, autonomous_steps.
+- `close browser` now → `browser_close` (removed `browser` from `close_app` target list).
+
+### OS v2.0 — External Reasoning, Camera, Chat
+
+- `app/agent/external_planner.py`: OpenAI-compatible client (DeepSeek-V4-Flash, AMD Radeon API). Env config: `SCREEN_AI_EXTERNAL_API_KEY`, `SCREEN_AI_EXTERNAL_BASE_URL` (default `https://developer.amd.com.cn/radeon/api/v1`), `SCREEN_AI_EXTERNAL_MODEL` (default `DeepSeek-V4-Flash`), `SCREEN_AI_EXTERNAL_TIMEOUT` (30), `SCREEN_AI_EXTERNAL_RETRIES` (1). Key is env-var-only, never logged; plans are advisory + validated against an allowed tool namespace.
+- Router + preview consult the external planner when intent is unknown (same `llm_plan` branch → risk merge + approval gates apply automatically).
+- Camera: `take_camera_photo` intent (`take my picture`, `capture a photo`, `use webcam`, `click a photo`) → `system.open_app(camera)` + `system.capture_photo` (ffmpeg dshow; graceful failure with hint). `media_camera` no longer emits the dangling `media.camera` tool.
+- Chat: unknown intent → `_rule_chat_reply` (local) then `external_planner.chat_reply`; response `status: "chat"`.
+
+### Task Execution Policy (10 phases)
+
+- `plan_to_graph()` (graph_schema.py) attaches per-node `pipeline` (`TOOL_PIPELINE` map) + `models` (`_models_for_tool`), and emits a `verify_goal` node (goal-level completion, Phase 10).
+- Router: `statuses` list (natural "Opening Chrome..." lines via `TOOL_STATUS_PHRASES` + `_step_status`), `goal` string (`_derive_goal`) in command + preview responses.
+- `TaskPlanner._plan_send_file`: generic goal-oriented send-file graph (FILE/CONTACT/CHANNEL entities); intent `send_file` (replaces `whatsapp_send_file`).
+
+### Generic Task Decomposition + Compound Command Planner
+
+- `EntityExtractor` (intent_engine/entity_extractor.py) gains `CONTACT` + `CHANNEL` entities; `CHANNELS`/`CHANNEL_URL` capability table (whatsapp/gmail/slack/telegram/signal/discord/messenger).
+- `task_planner.extract_entities()` universal helper returns `{file, contact, channel, channel_url, apps, sites, urls, paths}`.
+- `_plan_multi_intent_sequence` (TaskPlanner): splits chained commands on `,` `then` `and` `;` (protecting URLs, filenames, multi-word app names), classifies each segment via `Planner.classify_intent_sync`, chains `create_plan_sync` steps into one `compound_sequence` plan with per-step pipeline/models/verification/recovery. Context-dependent trailing actions (`search for the contact`, `attach the file`, `send it`) map to semantic screen/browser steps via `_ui_action_steps`.
+- `Planner` sync twins: `classify_intent_sync()` / `create_plan_sync()` (async versions were sync-bodied; the async methods now delegate).
+- Fixed `EntityExtractor` NUMBER-vs-FILE span overlap (number-leading filenames like `1.txt` now extract as FILE); `find x.file` → `file_search`; `_extract_app_name` strips `go to`/`navigate to`/`visit`.
+- Flagship example verified: "Go to File Explorer, open Desktop, find x.file, open GX Browser, navigate to https://web.whatsapp.com, search for the contact, attach the file and send it" → `compound_sequence`, 8 steps.
+
+### New test files
+
+- `ai_pc_operator/backend/test_cognitive_planner.py` (8/8)
+- `ai_pc_operator/backend/test_v2_external_chat_camera.py` (7/7)
+- `ai_pc_operator/backend/test_task_execution_policy.py` (5/5)
+- `ai_pc_operator/backend/test_generic_task_decomposition.py` (5/5)
+- `ai_pc_operator/backend/test_compound_sequence.py` (6/6)
+
+### External reasoning usage
+
+```powershell
+# set the key in the same cmd window before starting (never commit/log it)
+set SCREEN_AI_EXTERNAL_API_KEY=rc-xxxx
+cd /d ai_pc_operator\backend
+python -m app.main
+# or the official launcher: ai_pc_operator\start.bat (use setx for that window)
 ```

@@ -28,6 +28,13 @@ Track 2: Agentic AI
 - 🚨 **Emergency Stop**: One-tap halt of all operations
 - 🤖 **LLM Planning**: Local Qwen 1.5B GGUF planner for unknown intents (optional)
 - 📊 **Runtime Engine**: RAM-aware tiered model loading for 4GB laptops
+- 🧠 **Cognitive Planner**: Natural-language intent understanding (`browser_open`, aliases, spelling fixes, `take me to`/`browse`)
+- 🌐 **External Reasoning**: DeepSeek-V4-Flash via AMD Radeon API for unknown/complex commands (env-var API key, advisory plans)
+- 📷 **Camera Policy**: "Take my picture" → launch camera → capture photo → verify saved
+- 💬 **Chat Mode**: Conversational replies for greetings/questions when intent is unknown
+- 🔀 **Execution Graph**: Per-node pipeline + model + verification + recovery metadata, goal-level completion check
+- 📦 **Generic Task Decomposition**: Entity-driven (FILE/CONTACT/CHANNEL) send-file planning — no hardcoded app workflows
+- 🧩 **Compound Commands**: "open Chrome, then search X, then screenshot" → one chained execution plan
 
 ## Quick Start
 

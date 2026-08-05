@@ -66,6 +66,37 @@ class EntityExtractor:
         "youtube": "https://www.youtube.com",
     }
 
+    # Delivery channels (capability table, not a hardcoded workflow).
+    CHANNELS: Dict[str, List[str]] = {
+        "whatsapp": ["whatsapp", "wa", "web.whatsapp.com", "whatsapp web"],
+        "gmail": ["gmail", "mail", "email"],
+        "slack": ["slack"],
+        "telegram": ["telegram", "tg"],
+        "signal": ["signal"],
+        "discord": ["discord"],
+        "messenger": ["messenger"],
+    }
+
+    # Channel -> web app URL for the planner.
+    CHANNEL_URL: Dict[str, str] = {
+        "whatsapp": "https://web.whatsapp.com",
+        "gmail": "https://mail.google.com",
+        "slack": "https://app.slack.com",
+        "telegram": "https://web.telegram.org",
+        "signal": "https://signal.org",
+        "discord": "https://discord.com/app",
+        "messenger": "https://www.messenger.com",
+    }
+
+    # Structural words never treated as a contact/person name.
+    CONTACT_STOP_WORDS = frozenset({
+        "file", "folder", "directory", "desktop", "documents", "downloads",
+        "explorer", "browser", "chrome", "edge", "firefox", "gx", "opera",
+        "whatsapp", "gmail", "mail", "email", "slack", "telegram", "discord",
+        "signal", "messenger", "web", "website", "url", "site", "the", "a",
+        "an", "me", "you", "them", "it", "this", "that", "now", "please",
+    })
+
     # Entity patterns: (type, regex, confidence)
     PATTERNS: List[Tuple[str, str, float]] = [
         # URLs (highest priority)
@@ -80,8 +111,8 @@ class EntityExtractor:
         ("DOMAIN", r"\b([a-zA-Z0-9-]+\.(com|org|net|io|gov|edu|co|uk|ca|de))\b", 0.95),
         # Durations
         ("DURATION", r"\b(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)\b", 1.0),
-        # Numbers
-        ("NUMBER", r"\b\d+\b", 0.7),
+        # Numbers (skip when part of a filename like "1.txt")
+        ("NUMBER", r"\b\d+\b(?!\.\w{2,4}\b)", 0.7),
         # Filenames (heuristic: word.ext)
         ("FILE", r"\b[\w-]+\.(exe|msi|bat|cmd|ps1|py|js|json|txt|pdf|doc|docx|xls|xlsx|ppt|pptx|zip|tar|gz|jpg|png|gif|mp4|mp3)\b", 0.9),
     ]
@@ -162,6 +193,16 @@ class EntityExtractor:
         if site_entity:
             entities.append(site_entity)
 
+        # Extract delivery channel (whatsapp/gmail/slack/...)
+        channel_entity = self._extract_channel(text)
+        if channel_entity:
+            entities.append(channel_entity)
+
+        # Extract a contact/person name
+        contact_entity = self._extract_contact(text)
+        if contact_entity:
+            entities.append(contact_entity)
+
         # Sort by span position
         entities.sort(key=lambda e: e.span[0])
         return entities
@@ -220,6 +261,59 @@ class EntityExtractor:
                     metadata={"url": url},
                     raw_text=text[m.start():m.end()],
                 )
+        return None
+
+    def _extract_channel(self, text: str) -> Optional[Entity]:
+        """Extract a delivery channel (whatsapp/gmail/slack/telegram/...).
+
+        Longest alias first so "web.whatsapp.com" beats "whatsapp".
+        """
+        text_lower = text.lower()
+        for channel, aliases in sorted(
+            self.CHANNELS.items(),
+            key=lambda kv: -max(len(a) for a in kv[1]),
+        ):
+            for alias in aliases:
+                pattern = re.compile(rf"\b{re.escape(alias)}\b", re.IGNORECASE)
+                m = pattern.search(text_lower)
+                if m:
+                    return Entity(
+                        type="CHANNEL",
+                        value=channel,
+                        span=(m.start(), m.end()),
+                        confidence=1.0,
+                        metadata={"url": self.CHANNEL_URL.get(channel, "")},
+                        raw_text=text[m.start():m.end()],
+                    )
+        return None
+
+    def _extract_contact(self, text: str) -> Optional[Entity]:
+        """Extract a recipient/person name after 'to/for/@/contact/send to'."""
+        patterns = [
+            # "contact X", "person X", "user X"
+            r"\b(?:contact|person|user)\s+(@?[A-Za-z][A-Za-z0-9_.]{1,})",
+            # "@name"
+            r"@([A-Za-z][A-Za-z0-9_.]{1,})",
+            # "send <...> to X", "send to X", "for X"
+            r"\b(?:send|share|transfer)\b(?:[^.]*?)\b(?:to|for)\s+(@?[A-Za-z][A-Za-z0-9_.]{1,})",
+            r"\bto\s+(@?[A-Za-z][A-Za-z0-9_.]{1,})",
+            r"\bfor\s+(@?[A-Za-z][A-Za-z0-9_.]{1,})",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, text, re.IGNORECASE)
+            if not m:
+                continue
+            candidate = m.group(1).lstrip("@")
+            if candidate.lower() in self.CONTACT_STOP_WORDS:
+                continue
+            return Entity(
+                type="CONTACT",
+                value=candidate,
+                span=(m.start(1), m.end(1)),
+                confidence=0.9,
+                metadata={"raw_match": m.group(0)},
+                raw_text=candidate,
+            )
         return None
 
     def _duration_to_ms(self, n: int, unit: str) -> int:

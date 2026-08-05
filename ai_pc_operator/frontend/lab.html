@@ -188,6 +188,76 @@
             line-height: 1.4;
         }
 
+        .lab-approve-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin: 10px 0 6px;
+        }
+
+        .lab-approve-row .lab-button {
+            min-height: 42px;
+        }
+
+        .lab-button.approve {
+            background: linear-gradient(135deg, #00a884, #00c896);
+            color: #06261f;
+        }
+
+        .lab-button.reject {
+            background: #b54545;
+            color: #fff;
+        }
+
+        .lab-approval-card {
+            margin: 10px 0;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(251, 191, 36, 0.45);
+            background: linear-gradient(135deg, rgba(251, 191, 36, 0.16), #111b21);
+            display: grid;
+            gap: 8px;
+        }
+
+        .lab-approval-card .lab-approval-title {
+            color: #fbbf24;
+            font-weight: 800;
+            font-size: 0.92em;
+        }
+
+        .lab-approval-card .lab-approval-action {
+            color: #e9edef;
+            font-weight: 700;
+        }
+
+        .lab-approval-card .lab-approval-desc {
+            color: #d1d7db;
+            font-size: 0.88em;
+            line-height: 1.4;
+        }
+
+        .lab-approval-card .lab-approval-impact {
+            max-height: 160px;
+            overflow: auto;
+            padding: 8px;
+            border-radius: 6px;
+            background: #0b141a;
+            color: #d1d7db;
+            border: 1px solid rgba(134, 150, 160, 0.18);
+            white-space: pre-wrap;
+            font-size: 0.82em;
+        }
+
+        .lab-approval-card .lab-approval-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .lab-approval-card .lab-approval-actions .lab-button {
+            min-height: 40px;
+        }
+
         @media (max-width: 820px) {
             .lab-grid {
                 grid-template-columns: 1fr;
@@ -239,6 +309,7 @@
                 <div id="lab-meta" class="lab-meta"></div>
                 <div id="approval-note" class="approval-note">No preview yet.</div>
                 <div id="lab-plan-actions" class="lab-plan-actions"></div>
+                <div id="lab-approval-cards" class="lab-approval-cards"></div>
                 <pre id="lab-json" class="lab-pre">No preview yet.</pre>
             </aside>
         </section>
@@ -252,7 +323,9 @@
         const jsonBox = document.getElementById('lab-json');
         const approvalNote = document.getElementById('approval-note');
         const planActions = document.getElementById('lab-plan-actions');
+        const approvalCards = document.getElementById('lab-approval-cards');
         const apiClient = window.ScreenAI?.api;
+        let labApprovalPollTimer = null;
 
         document.getElementById('preview-btn').addEventListener('click', preview);
         document.getElementById('cache-clear-btn').addEventListener('click', clearAppCache);
@@ -260,9 +333,11 @@
             input.value = '';
             meta.replaceChildren();
             planActions.replaceChildren();
+            approvalCards.replaceChildren();
             jsonBox.textContent = 'No preview yet.';
             approvalNote.className = 'approval-note';
             approvalNote.textContent = 'No preview yet.';
+            stopLabApprovalPolling();
         });
 
         input.addEventListener('keydown', (event) => {
@@ -410,32 +485,159 @@
             const steps = data.plan?.steps || [];
             if (!text || !steps.length) return;
 
-            if (data.requires_approval) {
-                const remote = document.createElement('a');
-                remote.className = 'lab-button secondary';
-                remote.href = '/remote/index.html';
-                remote.textContent = 'Open Remote for Approval';
-                remote.style.textDecoration = 'none';
-                remote.style.display = 'grid';
-                remote.style.placeItems = 'center';
-                planActions.appendChild(remote);
-                const note = document.createElement('div');
-                note.className = 'lab-action-note';
-                note.textContent = 'Preview is read-only. Use Remote Send so the backend can pause and show Approve/Reject.';
-                planActions.appendChild(note);
-                return;
-            }
+            const approveRow = document.createElement('div');
+            approveRow.className = 'lab-approve-row';
 
-            const run = document.createElement('button');
-            run.className = 'lab-button';
-            run.type = 'button';
-            run.textContent = 'Run Low-Risk Plan';
-            run.addEventListener('click', () => runLowRiskPlan(text));
-            planActions.appendChild(run);
+            const approveBtn = document.createElement('button');
+            approveBtn.className = 'lab-button approve';
+            approveBtn.type = 'button';
+            approveBtn.textContent = data.requires_approval ? 'Approve & Send' : 'Approve & Run';
+            approveBtn.addEventListener('click', () => approveAndSend(text));
+            approveRow.appendChild(approveBtn);
+
+            const rejectBtn = document.createElement('button');
+            rejectBtn.className = 'lab-button reject';
+            rejectBtn.type = 'button';
+            rejectBtn.textContent = 'Reject';
+            rejectBtn.addEventListener('click', () => rejectPlan(text));
+            approveRow.appendChild(rejectBtn);
+
+            planActions.appendChild(approveRow);
+
             const note = document.createElement('div');
             note.className = 'lab-action-note';
-            note.textContent = 'Runs the command through /command only when preview says no approval is required.';
+            if (data.requires_approval) {
+                note.textContent = 'Approve & Send starts the command. The backend will pause and show the Approve/Reject card below when it needs your decision.';
+            } else {
+                note.textContent = 'Approve & Run sends the command through /command. Low-risk plans run without an extra approval gate.';
+            }
             planActions.appendChild(note);
+        }
+
+        async function approveAndSend(text) {
+            const working = addMessage('incoming', 'Sending approved plan...');
+            try {
+                const data = apiClient && location.protocol !== 'file:'
+                    ? await apiClient.commands.send(text)
+                    : await executeWithFetch(text);
+                working.querySelector('.message-text').textContent = summarizeExecution(data);
+                if (data.requires_approval) {
+                    startLabApprovalPolling();
+                }
+            } catch (error) {
+                working.querySelector('.message-text').textContent = `Send failed: ${error.message || error}`;
+            }
+            thread.scrollTop = thread.scrollHeight;
+        }
+
+        async function rejectPlan(text) {
+            addMessage('incoming', `Rejected plan for: ${text}`);
+            stopLabApprovalPolling();
+            approvalCards.replaceChildren();
+        }
+
+        function startLabApprovalPolling() {
+            stopLabApprovalPolling();
+            pollLabApprovals();
+            labApprovalPollTimer = setInterval(pollLabApprovals, 1600);
+        }
+
+        function stopLabApprovalPolling() {
+            if (labApprovalPollTimer) {
+                clearInterval(labApprovalPollTimer);
+                labApprovalPollTimer = null;
+            }
+        }
+
+        async function pollLabApprovals() {
+            try {
+                const data = apiClient && location.protocol !== 'file:'
+                    ? await apiClient.approvals.pending()
+                    : await pendingApprovalsWithFetch();
+                renderLabApprovalCards(data.approvals || []);
+            } catch (error) {
+                console.warn('[lab] approval poll failed:', error);
+            }
+        }
+
+        async function pendingApprovalsWithFetch() {
+            const response = await fetch(resolveApiPath('/approvals/pending'), {
+                method: 'GET',
+                headers: {'Content-Type': 'application/json'},
+            });
+            return await response.json().catch(() => ({ approvals: [] }));
+        }
+
+        async function resolveLabApproval(approvalId, approved) {
+            try {
+                if (apiClient && location.protocol !== 'file:') {
+                    await apiClient.approvals.resolve(approvalId, approved, null);
+                } else {
+                    await fetch(resolveApiPath('/approvals/resolve'), {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ approval_id: approvalId, approved, master_key: null }),
+                    });
+                }
+                addMessage('incoming', approved ? `Approved request ${approvalId}.` : `Rejected request ${approvalId}.`);
+                await pollLabApprovals();
+            } catch (error) {
+                addMessage('incoming', `Failed to resolve approval: ${error.message || error}`);
+            }
+        }
+
+        function renderLabApprovalCards(approvals) {
+            approvalCards.replaceChildren();
+            if (!approvals.length) return;
+            approvals.forEach((approval) => {
+                const card = document.createElement('div');
+                card.className = 'lab-approval-card';
+
+                const title = document.createElement('div');
+                title.className = 'lab-approval-title';
+                title.textContent = 'Approval needed';
+                card.appendChild(title);
+
+                const action = document.createElement('div');
+                action.className = 'lab-approval-action';
+                action.textContent = approval.action_type || 'Action';
+                card.appendChild(action);
+
+                const desc = document.createElement('div');
+                desc.className = 'lab-approval-desc';
+                desc.textContent = approval.description || 'Approve this action to continue.';
+                card.appendChild(desc);
+
+                if (approval.impact_summary) {
+                    const impact = document.createElement('pre');
+                    impact.className = 'lab-approval-impact';
+                    const summary = typeof approval.impact_summary === 'string'
+                        ? approval.impact_summary
+                        : JSON.stringify(approval.impact_summary, null, 2);
+                    impact.textContent = summary;
+                    card.appendChild(impact);
+                }
+
+                const actions = document.createElement('div');
+                actions.className = 'lab-approval-actions';
+
+                const approve = document.createElement('button');
+                approve.className = 'lab-button approve';
+                approve.type = 'button';
+                approve.textContent = 'Approve';
+                approve.addEventListener('click', () => resolveLabApproval(approval.id, true));
+                actions.appendChild(approve);
+
+                const reject = document.createElement('button');
+                reject.className = 'lab-button reject';
+                reject.type = 'button';
+                reject.textContent = 'Reject';
+                reject.addEventListener('click', () => resolveLabApproval(approval.id, false));
+                actions.appendChild(reject);
+
+                card.appendChild(actions);
+                approvalCards.appendChild(card);
+            });
         }
 
         async function runLowRiskPlan(text) {
@@ -445,6 +647,9 @@
                     ? await apiClient.commands.send(text)
                     : await executeWithFetch(text);
                 working.querySelector('.message-text').textContent = summarizeExecution(data);
+                if (data.requires_approval) {
+                    startLabApprovalPolling();
+                }
             } catch (error) {
                 working.querySelector('.message-text').textContent = `Execution failed: ${error.message || error}`;
             }
@@ -465,7 +670,11 @@
 
         function summarizeExecution(data) {
             if (data.requires_approval) {
-                return 'Execution paused for approval. Open Remote to approve or reject.';
+                return [
+                    'Execution paused for approval.',
+                    `Approval ID: ${data.approval_id || 'pending'}`,
+                    'The Approve / Reject card is now visible below the plan panel.',
+                ].join('\n');
             }
             return [
                 `Status: ${data.status || 'unknown'}`,

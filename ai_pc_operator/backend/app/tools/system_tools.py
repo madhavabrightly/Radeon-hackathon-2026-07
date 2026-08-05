@@ -16,7 +16,7 @@ import shutil
 import time
 import os
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 
 class SystemTools:
@@ -211,6 +211,177 @@ class SystemTools:
                 "error": str(e),
             }
 
+    async def close_app(self, name: str, force: bool = False) -> Dict[str, Any]:
+        """Close a single application by friendly name (e.g. 'chrome', 'notepad').
+
+        Uses psutil to find processes whose name matches the alias and closes
+        their top-level windows gracefully (WM_CLOSE) before falling back to
+        terminate/kill when force=True.
+        """
+        try:
+            if not name or not name.strip():
+                return {"status": "failed", "error": "App name is required"}
+
+            cleaned = name.strip().lower()
+            alias = self.APP_ALIASES.get(cleaned, cleaned.split()[0])
+            # Map common aliases to process names
+            process_names = self._app_alias_to_process_names(alias)
+
+            closed: List[Dict[str, Any]] = []
+            skipped: List[Dict[str, Any]] = []
+            for proc in psutil.process_iter(["pid", "name"]):
+                pname = (proc.info.get("name") or "").lower()
+                if not pname:
+                    continue
+                pbase = pname.replace(".exe", "")
+                if pbase in process_names or any(
+                    pbase.startswith(pn) for pn in process_names
+                ):
+                    try:
+                        if not force and platform.system().lower() == "windows":
+                            self._close_windows_for_pid(proc.info["pid"])
+                        proc.terminate()
+                        closed.append({"pid": proc.info["pid"], "name": pname})
+                    except (psutil.AccessDenied, psutil.NoSuchProcess):
+                        skipped.append({"pid": proc.info["pid"], "name": pname, "reason": "access_denied"})
+                    except Exception as e:
+                        skipped.append({"pid": proc.info["pid"], "name": pname, "reason": str(e)})
+
+            if not closed and not skipped:
+                return {
+                    "status": "failed",
+                    "error": f"No running processes matched '{name}'",
+                    "searched": process_names,
+                }
+
+            return {
+                "status": "success",
+                "message": f"Closed {len(closed)} process(es) for '{name}'",
+                "closed": closed,
+                "skipped": skipped,
+                "force": force,
+            }
+        except Exception as e:
+            return {"status": "failed", "error": str(e)}
+
+    async def close_all_apps(
+        self,
+        exclude_system: bool = True,
+        keep_names: Optional[List[str]] = None,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Close all user applications.
+
+        - exclude_system=True keeps critical system processes alive
+          (explorer, dwm, winlogon, csrss, services, lsass, smss, svchost,
+          taskmgr, and the current python/uvicorn process).
+        - keep_names is an extra list of process basenames to never close
+          (e.g. ['code', 'chrome'] to keep VS Code and Chrome open).
+        - force=True escalates terminate() to kill() when a process refuses
+          to exit.
+        """
+        try:
+            SYSTEM_PROCESSES = {
+                "explorer", "dwm", "winlogon", "csrss", "services",
+                "lsass", "smss", "svchost", "taskmgr", "system",
+                "registry", "sihclient", "fontdrvhost", "wininit",
+            }
+            current_pid = os.getpid()
+            keep = set(n.lower().replace(".exe", "") for n in (keep_names or []))
+
+            closed: List[Dict[str, Any]] = []
+            skipped: List[Dict[str, Any]] = []
+            for proc in psutil.process_iter(["pid", "name"]):
+                pname = (proc.info.get("name") or "").lower()
+                pbase = pname.replace(".exe", "")
+                if not pbase:
+                    continue
+                if proc.info["pid"] == current_pid:
+                    continue
+                if exclude_system and pbase in SYSTEM_PROCESSES:
+                    continue
+                if pbase in keep:
+                    continue
+                # Skip our own backend python process
+                if pbase in {"python", "pythonw", "uvicorn"}:
+                    try:
+                        cmdline = " ".join(proc.cmdline() or []).lower()
+                        if "ai_pc_operator" in cmdline or "uvicorn" in cmdline or "app.main" in cmdline:
+                            continue
+                    except (psutil.AccessDenied, psutil.NoSuchProcess):
+                        continue
+                try:
+                    if not force and platform.system().lower() == "windows":
+                        self._close_windows_for_pid(proc.info["pid"])
+                    proc.terminate()
+                    closed.append({"pid": proc.info["pid"], "name": pname})
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    skipped.append({"pid": proc.info["pid"], "name": pname, "reason": "access_denied"})
+                except Exception as e:
+                    skipped.append({"pid": proc.info["pid"], "name": pname, "reason": str(e)})
+
+            return {
+                "status": "success",
+                "message": f"Closed {len(closed)} application(s)",
+                "closed_count": len(closed),
+                "skipped_count": len(skipped),
+                "closed_sample": closed[:20],
+                "skipped_sample": skipped[:10],
+                "excluded_system": exclude_system,
+                "kept": sorted(keep),
+                "force": force,
+            }
+        except Exception as e:
+            return {"status": "failed", "error": str(e)}
+
+    def _app_alias_to_process_names(self, alias: str) -> set:
+        """Map an app alias to a set of process basenames to look for."""
+        alias = alias.lower().replace(".exe", "")
+        mapping = {
+            "chrome": {"chrome"},
+            "msedge": {"msedge", "microsoftedge"},
+            "firefox": {"firefox"},
+            "opera": {"opera"},
+            "opera-gx": {"opera", "opera_gx"},
+            "notepad": {"notepad"},
+            "calc": {"calculatorapp", "calc"},
+            "explorer": {"explorer"},
+            "mspaint": {"mspaint"},
+            "code": {"code"},
+            "excel": {"excel"},
+            "winword": {"winword"},
+            "powerpnt": {"powerpnt"},
+            "cmd": {"cmd"},
+            "powershell": {"powershell", "pwsh"},
+            "wt": {"windowsterminal", "wt"},
+            "camera": {"windowscamera"},
+        }
+        names = mapping.get(alias, {alias})
+        return names
+
+    def _close_windows_for_pid(self, pid: int) -> None:
+        """Send WM_CLOSE to all top-level windows owned by pid (Windows only)."""
+        if platform.system().lower() != "windows":
+            return
+        try:
+            EnumWindows = ctypes.windll.user32.EnumWindows
+            GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
+            PostMessageW = ctypes.windll.user32.PostMessageW
+            WM_CLOSE = 0x0010
+
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+            def enum_proc(hwnd, _lparam):
+                owner_pid = ctypes.c_int()
+                GetWindowThreadProcessId(hwnd, ctypes.byref(owner_pid))
+                if owner_pid.value == pid:
+                    PostMessageW(hwnd, WM_CLOSE, 0, 0)
+                return True
+
+            EnumWindows(enum_proc, 0)
+        except Exception:
+            # Best-effort; terminate() will still run.
+            pass
+
     async def network_status(self) -> Dict[str, Any]:
         """Get network status."""
         net = psutil.net_io_counters()
@@ -221,6 +392,81 @@ class SystemTools:
             "packets_recv": net.packets_recv,
         }
 
+    async def capture_photo(self, save_dir: Optional[str] = None) -> Dict[str, Any]:
+        """Capture a photo from the webcam (Windows dshow via ffmpeg if available).
+
+        Follows the v2.0 camera policy: graceful failure with a clear message
+        when no capture backend is available, never fabricates success.
+        """
+        return await asyncio.to_thread(self._capture_photo_sync, save_dir)
+
+    def _capture_photo_sync(self, save_dir: Optional[str] = None) -> Dict[str, Any]:
+        if platform.system().lower() != "windows":
+            return {
+                "status": "failed",
+                "error": "photo capture is only supported on Windows (dshow)",
+            }
+
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return {
+                "status": "failed",
+                "error": (
+                    "Camera opened, but photo capture needs ffmpeg with dshow "
+                    "support (install ffmpeg and a webcam driver, then retry)."
+                ),
+                "hint": "install ffmpeg: winget install ffmpeg",
+            }
+
+        save_path = self._photo_save_path(save_dir)
+        try:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                [
+                    ffmpeg, "-y",
+                    "-f", "dshow",
+                    "-i", "video=Camera",
+                    "-frames:v", "1",
+                    str(save_path),
+                ],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        except Exception as e:
+            return {
+                "status": "failed",
+                "error": f"photo capture failed: {e}",
+            }
+
+        if not save_path.exists() or save_path.stat().st_size == 0:
+            return {
+                "status": "failed",
+                "error": (
+                    "Camera opened, but the capture produced no image. The "
+                    "webcam may be in use or the device name differs."
+                ),
+            }
+
+        return {
+            "status": "success",
+            "path": str(save_path),
+            "bytes": save_path.stat().st_size,
+        }
+
+    def _photo_save_path(self, save_dir: Optional[str]) -> Path:
+        base = (
+            Path(save_dir)
+            if save_dir
+            else Path(os.environ.get("SCREEN_AI_DATA_DIR", "") or "").resolve()
+            if os.environ.get("SCREEN_AI_DATA_DIR", "")
+            else Path.home() / "Pictures"
+        )
+        base = base / "screen_ai_photos"
+        base.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        return base / f"photo_{stamp}.jpg"
+
     async def open_settings(self, page: str = "ms-settings:") -> Dict[str, Any]:
         """Open a Windows Settings page."""
         try:
@@ -228,6 +474,48 @@ class SystemTools:
                 page = "ms-settings:"
             subprocess.Popen(["explorer.exe", page])
             return {"status": "success", "page": page}
+        except Exception as e:
+            return {"status": "failed", "error": str(e)}
+
+    async def shutdown(self, delay_seconds: int = 0) -> Dict[str, Any]:
+        """Shut down the PC (Windows only). HIGH RISK - requires approval."""
+        try:
+            if platform.system().lower() != "windows":
+                return {"status": "failed", "error": "shutdown is Windows only"}
+            subprocess.Popen(
+                ["shutdown", "/s", "/t", str(max(0, int(delay_seconds)))]
+            )
+            return {
+                "status": "success",
+                "action": "shutdown",
+                "delay_seconds": int(delay_seconds),
+            }
+        except Exception as e:
+            return {"status": "failed", "error": str(e)}
+
+    async def restart(self, delay_seconds: int = 0) -> Dict[str, Any]:
+        """Restart the PC (Windows only). HIGH RISK - requires approval."""
+        try:
+            if platform.system().lower() != "windows":
+                return {"status": "failed", "error": "restart is Windows only"}
+            subprocess.Popen(
+                ["shutdown", "/r", "/t", str(max(0, int(delay_seconds)))]
+            )
+            return {
+                "status": "success",
+                "action": "restart",
+                "delay_seconds": int(delay_seconds),
+            }
+        except Exception as e:
+            return {"status": "failed", "error": str(e)}
+
+    async def lock(self) -> Dict[str, Any]:
+        """Lock the workstation (Windows only)."""
+        try:
+            if platform.system().lower() != "windows":
+                return {"status": "failed", "error": "lock is Windows only"}
+            ctypes.windll.user32.LockWorkStation()
+            return {"status": "success", "action": "lock"}
         except Exception as e:
             return {"status": "failed", "error": str(e)}
 

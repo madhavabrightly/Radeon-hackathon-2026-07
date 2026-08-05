@@ -12,6 +12,12 @@
 - 🌐 **Browser Automation**: Playwright-based web control
 - 📊 **System Monitoring**: CPU, RAM, disk, processes
 - 🛑 **Emergency Stop**: Instant halt of all operations
+- 🧠 **Cognitive Planner**: Natural-language intent understanding with semantic matching
+- 🌐 **External Reasoning**: DeepSeek-V4-Flash via AMD Radeon API (env-var key, advisory)
+- 📷 **Camera Capture**: Take-my-picture → launch camera → capture → verify
+- 💬 **Chat Mode**: Conversational replies when intent is unknown
+- 🧩 **Compound Commands**: Chained multi-action commands → one execution graph
+- 📦 **Generic Decomposition**: Entity-driven planning, no hardcoded app workflows
 
 ## Quick Start
 

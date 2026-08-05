@@ -1,5 +1,59 @@
 # Screen-AI Run Change Log
 
+## 2026-08-05
+
+Purpose: implement the four agent-spec upgrades (Cognitive Planner v1.0, OS v2.0 external reasoning + camera + chat, Task Execution Policy, Generic Task Decomposition + Compound Command planner) and keep everything additive.
+
+### Master Cognitive Planner v1.0
+
+- Added `browser_open` as a first-class intent (open/launch/run/fire up/bring up/start Chrome/Edge/Firefox → `system.open_app`).
+- `resolve_user_alias` rewritten single-pass so aliases never cascade-expand ("vscode" → "visual studio code", not double-expanded "code").
+- Added `take me to` / `browse` to the navigate/open vocabulary ("Take me to youtube", "Browse youtube" classify correctly).
+- Wired `semantic_ocr_match` into `screen_tools._score` so "Click Login" matches "Sign In" (0.95).
+- Router now returns `cognitive_plan` (intent, entities, pipelines, models, verification, recovery, confidence, risk, canonical actions, wait strategies, autonomous steps) in `/command` and `/command/preview`.
+- Fixed `close browser` → `browser_close` (was falling to `close_app`).
+
+### OS v2.0: External Reasoning, Camera Policy, Chat Mode
+
+- New `app/agent/external_planner.py`: OpenAI-compatible chat-completions client for DeepSeek-V4-Flash via the AMD Radeon API. API key is env-var-only (`SCREEN_AI_EXTERNAL_API_KEY`), never logged or committed; returned plans are advisory and validated.
+- Router consults the external planner for unknown intent (same `llm_plan` branch → risk merge + approval gates apply). Preview path too.
+- Camera policy: `take_camera_photo` intent (take my picture / capture a photo / use webcam / click a photo) → launch camera + `system.capture_photo` (ffmpeg dshow when available, graceful failure otherwise). Fixed dangling `media.camera` tool → `system.open_app("camera")`.
+- Chat mode: unknown intent → local rule-based replies (greetings/identity/capabilities) then external model; returned as `status: "chat"`.
+
+### Task Execution Policy (10 phases)
+
+- `graph_schema.plan_to_graph` now attaches per-node `pipeline` + `models` (Phase 3/4) and a `verify_goal` node (Phase 10, goal-level completion check).
+- Router adds `statuses` (natural "Opening Chrome..." lines, Phase 6) and `goal` to command/preview responses.
+- `TaskPlanner._plan_send_file` produces a generic goal-oriented send-file graph (replaces the app-specific WhatsApp flow).
+
+### Generic Task Decomposition + Compound Command Planner
+
+- `EntityExtractor` gains `CONTACT` + `CHANNEL` entities (whatsapp/gmail/slack/telegram → web URL capability table).
+- New `extract_entities()` universal helper; `_plan_send_file` is entity-driven (FILE/CONTACT/CHANNEL), never app-specific.
+- New generic `_plan_multi_intent_sequence`: splits any chained command on separators (protecting URLs/filenames/multi-word app names), classifies each segment, chains steps into one `compound_sequence` plan with per-step metadata.
+- `Planner` gains sync `classify_intent_sync` / `create_plan_sync` (the async methods had sync bodies).
+- Example works end-to-end: "Go to File Explorer, open Desktop, find x.file, open GX Browser, navigate to https://web.whatsapp.com, search for the contact, attach the file and send it" → 8-step compound plan.
+- Fixed `EntityExtractor` NUMBER-vs-FILE span overlap so number-leading filenames (`1.txt`) extract correctly.
+- `_extract_app_name` now strips `go to`/`navigate to`/`visit`; `find x.file` → `file_search`.
+
+### New files
+
+- `app/agent/external_planner.py`
+- `backend/test_cognitive_planner.py`, `test_v2_external_chat_camera.py`, `test_task_execution_policy.py`, `test_generic_task_decomposition.py`, `test_compound_sequence.py`
+
+### Verified
+
+```text
+python -u ai_pc_operator\backend\test_cognitive_planner.py          # 8/8
+python -u ai_pc_operator\backend\test_v2_external_chat_camera.py    # 7/7
+python -u ai_pc_operator\backend\test_task_execution_policy.py      # 5/5
+python -u ai_pc_operator\backend\test_generic_task_decomposition.py # 5/5
+python -u ai_pc_operator\backend\test_compound_sequence.py          # 6/6
+python -u ai_pc_operator\backend\test_basic.py                      # All tests passed
+python -u ai_pc_operator\backend\test_new_spec.py                   # All new-spec tests passed
+python _test_planner.py                                             # 131/132 (pre-existing docker build gap)
+```
+
 ## 2026-07-30 20:54:57 +05:30
 
 Purpose: turn previews into a real plan-to-action bridge while keeping approval gates intact.

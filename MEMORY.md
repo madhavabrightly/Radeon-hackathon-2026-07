@@ -61,7 +61,7 @@ Model roles:
 
 ## Current Status
 
-Updated: 2026-07-30 20:54:57 +05:30
+Updated: 2026-08-05
 
 ### ✅ Working
 
@@ -77,14 +77,22 @@ Updated: 2026-07-30 20:54:57 +05:30
 - Shared frontend API client (`api.js`) and UI helpers (`ui.js`)
 - Pytest-safe backend test suite using isolated DB paths where needed
 - Screen scanning (UIA + OpenCV)
-- Click-by-text execution
+- Click-by-text execution with semantic OCR matching (login ↔ sign in)
 - Screenshot capture
 - JSON UI maps
 - Debug overlay images
+- **Cognitive planner**: `browser_open` first-class intent, single-pass alias resolution, `take me to`/`browse` navigation vocabulary
+- **External reasoning**: `external_planner.py` (DeepSeek-V4-Flash via AMD Radeon API, env-var key only), wired into unknown-intent path
+- **Camera**: `take_camera_photo` intent + `system.capture_photo` (ffmpeg dshow, graceful failure)
+- **Chat mode**: local rules + external model, `status: "chat"` response
+- **Execution graph metadata**: per-node `pipeline` + `models` + `verify_goal` node (Phase 3/4/10)
+- **Status messages**: `statuses` list ("Opening Chrome...") + `goal` in responses
+- **Generic task decomposition**: `extract_entities()` (FILE/CONTACT/CHANNEL), entity-driven `send_file` plan
+- **Compound command planner**: `_plan_multi_intent_sequence` splits chained commands into one `compound_sequence` execution graph
 
 ### 🚧 In Progress
 
-- More robust command decomposition for long multi-app workflows
+- Live WhatsApp/DOM attach automation (graph plans honestly; partial-progress reporting)
 - Better verification after tool execution
 - Real model artifact loading and low-RAM scheduling refinements
 

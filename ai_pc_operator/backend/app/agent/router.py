@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Optional, Dict, Any, List
 
 from app.agent.llm_planner import LLMPlanner
+from app.agent.external_planner import ExternalPlanner
 from app.agent.planner import Planner
 from app.agent.task_planner import TaskPlanner
 from app.agent.memory import Memory
@@ -79,6 +81,7 @@ class AgentRouter:
         self.planner = Planner()
         self.task_planner = TaskPlanner()
         self.llm_planner = LLMPlanner()
+        self.external_planner = ExternalPlanner()
         self.memory = Memory()
         self.redactor = LogRedactor()
         self.risk_classifier = RiskClassifier()
@@ -123,6 +126,28 @@ class AgentRouter:
         }
 
         self.emergency_stopped = False
+
+    # Natural-language status phrases per tool (Phase 6: user-visible status).
+    # Keys support "{arg}" placeholders substituted from the step args.
+    TOOL_STATUS_PHRASES: Dict[str, str] = {
+        "system.open_app": "Opening {name}...",
+        "system.close_app": "Closing {name}...",
+        "system.capture_photo": "Capturing photo...",
+        "system.keep_awake": "Keeping the PC awake...",
+        "system.mouse_jiggle": "Moving the mouse to stay active...",
+        "browser.open": "Opening {url}...",
+        "browser.search": "Searching for {query}...",
+        "browser.close": "Closing the browser...",
+        "browser.download": "Downloading {url}...",
+        "screen.click_text": "Clicking {text}...",
+        "screen.scan": "Scanning the screen...",
+        "file.list": "Listing files...",
+        "file.read": "Reading file...",
+        "file.quarantine": "Moving to quarantine...",
+        "file.restore": "Restoring file...",
+        "memory.remember": "Remembering that...",
+        "memory.recall": "Recalling...",
+    }
 
     def _register_lazy_models(self) -> None:
         """Register lazy model loaders for RAM-aware prefetch."""
@@ -192,6 +217,13 @@ class AgentRouter:
             )
             logger.info(f"Intent: {intent}")
 
+            # Step 2a: Teach the planner from this command so future similar
+            # inputs match even when phrasing differs.
+            try:
+                self.planner.remember(text, intent)
+            except Exception:
+                pass
+
             llm_plan: Dict[str, Any] | None = None
             qwen_allowed = self.ssd_tier.can_load("qwen-1.5b-q4", ssd_plan)
             if intent == "unknown" and budget.allow_llm and qwen_allowed:
@@ -200,6 +232,18 @@ class AgentRouter:
                 if llm_plan:
                     intent = llm_plan.get("intent", intent)
                     logger.info("LLM planner produced a plan for unknown intent")
+
+            # Advisory external reasoning model (OpenAI-compatible endpoint).
+            # Consulted only when intent is still unknown; the key comes from
+            # the SCREEN_AI_EXTERNAL_API_KEY env var and is never logged.
+            if intent == "unknown" and self.external_planner.is_configured():
+                external_plan = await self.external_planner.create_plan(text)
+                if external_plan:
+                    llm_plan = external_plan
+                    intent = external_plan.get("intent", intent)
+                    logger.info(
+                        "External reasoning model produced a plan for unknown intent"
+                    )
             model_plan = self.model_insights.plan_for_command(
                 text,
                 intent,
@@ -267,14 +311,14 @@ class AgentRouter:
                         "result": "User rejected the action",
                     }
 
-            # Step 6: Plan actions
-            plan = (
-                task_plan.to_dict()
-                if task_plan
-                else llm_plan or await self.planner.create_plan(text, intent)
+            # Step 6: Plan actions (cognitive planner when no compound/LLM plan)
+            built = await self._build_cognitive_plan(
+                text, intent, task_plan, llm_plan
             )
+            plan = built["plan"]
+            steps = built["steps"]
+            cognitive_plan = built["cognitive_plan"]
             logger.info(f"Plan: {plan}")
-            steps = plan.get("steps", [])
             self.heatmap.record_plan(intent, steps)
             self._write_plan_cache(text, intent, plan, tier_decision.to_dict())
 
@@ -283,18 +327,25 @@ class AgentRouter:
                     plan.get("error")
                     or "I could not map that command to a safe tool plan yet."
                 )
+                # Chat mode: when the command couldn't be mapped to tools,
+                # answer conversationally (local rules first, then the
+                # external model if configured).
+                chat_reply: Optional[str] = None
+                if intent == "unknown":
+                    chat_reply = await self._chat_reply(text)
                 response = {
                     "command_id": command_id,
-                    "status": "unsupported",
-                    "result": message,
+                    "status": "chat" if chat_reply else "unsupported",
+                    "result": chat_reply or message,
                     "requires_approval": requires_approval,
                     "runtime": tier_decision.to_dict(),
                     "ssd_tier": ssd_plan.to_dict(),
                     "model_plan": model_plan,
+                    "cognitive_plan": cognitive_plan,
                 }
                 await self._update_command_status(
                     command_id,
-                    "unsupported",
+                    response["status"],
                     response["result"],
                 )
                 await self.memory.add(self.redactor.redact(text), intent, response)
@@ -302,6 +353,7 @@ class AgentRouter:
 
             # Step 7: Execute tools via strategy engine (circuit breaker + retry)
             results = []
+            statuses: List[str] = []
             for step in steps:
                 if self.emergency_stopped:
                     break
@@ -309,6 +361,9 @@ class AgentRouter:
                 tool_name = step.get("tool")
                 tool_args = step.get("args", {})
                 tool_start = time.time()
+
+                # User-visible status (Phase 6): natural phrase per step.
+                statuses.append(self._step_status(tool_name or "unknown", tool_args))
 
                 # Use strategy engine for circuit breaker + adaptive retry
                 async def _exec(tool, args):
@@ -330,7 +385,8 @@ class AgentRouter:
             verified = all(r.get("status") == "success" for r in results)
 
             # Step 8b: Wrap the plan in the planning-engine execution-graph schema
-            execution_graph = self._build_execution_graph(plan, risk_level)
+            goal = self._derive_goal(text, intent)
+            execution_graph = self._build_execution_graph(plan, risk_level, goal=goal)
 
             # Step 9: Format response with telemetry + strategy data
             pipeline_ms = (time.time() - pipeline_start) * 1000
@@ -340,11 +396,14 @@ class AgentRouter:
                 "risk": risk_level,
                 "status": "completed" if verified else "partial",
                 "result": self._format_results(results),
+                "statuses": statuses,
+                "goal": goal,
                 "requires_approval": requires_approval,
                 "runtime": tier_decision.to_dict(),
                 "ssd_tier": ssd_plan.to_dict(),
                 "model_plan": model_plan,
                 "execution_graph": execution_graph,
+                "cognitive_plan": cognitive_plan,
                 "telemetry": {
                     "pipeline_ms": round(pipeline_ms, 1),
                     "tools_executed": len(results),
@@ -426,6 +485,7 @@ class AgentRouter:
         self,
         plan: Dict[str, Any],
         risk_level: int,
+        goal: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Wrap a legacy plan in the planning-engine execution-graph schema.
 
@@ -436,7 +496,7 @@ class AgentRouter:
             - approval_required: bool
         """
         try:
-            nodes = plan_to_graph(plan, risk_level=risk_level)
+            nodes = plan_to_graph(plan, risk_level=risk_level, goal=goal)
             validation = validate_graph_node(nodes)
             approval_required = any(
                 n.get("type") == "approval" for n in nodes
@@ -456,8 +516,137 @@ class AgentRouter:
                 "approval_required": False,
             }
 
+    async def _build_cognitive_plan(
+        self,
+        text: str,
+        intent: str,
+        task_plan: Any = None,
+        llm_plan: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build a plan for the command, attaching cognitive metadata when
+        the regular planner produced it.
+
+        Returns a dict with:
+            - plan: the step-based plan (task/LLM plans keep their shape,
+              otherwise the cognitive plan's execution_graph)
+            - steps: list of tool steps
+            - cognitive_plan: full cognitive metadata dict, or {} when the
+              task/LLM planner produced the plan (they have their own shape)
+        """
+        cognitive_plan: Dict[str, Any] = {}
+        if task_plan is not None:
+            plan = task_plan.to_dict()
+        elif llm_plan:
+            plan = llm_plan
+        else:
+            try:
+                cognitive_plan = await self.planner.create_cognitive_plan(
+                    text, intent
+                )
+                plan = {"steps": cognitive_plan.get("execution_graph", [])}
+            except Exception as e:  # defensive: never break the command path
+                logger.warning(
+                    "create_cognitive_plan failed, falling back: %s", e
+                )
+                plan = await self.planner.create_plan(text, intent)
+        steps = plan.get("steps", [])
+        return {
+            "plan": plan,
+            "steps": steps,
+            "cognitive_plan": cognitive_plan,
+        }
+
+    async def _chat_reply(self, text: str) -> Optional[str]:
+        """Return a conversational reply for a non-command message.
+
+        Local rule-based smalltalk first (fast, no API cost); falls through
+        to the external reasoning model when configured; otherwise None.
+        """
+        local = self._rule_chat_reply(text)
+        if local:
+            return local
+        if self.external_planner.is_configured():
+            try:
+                reply = await self.external_planner.chat_reply(text)
+                if reply:
+                    return reply
+            except Exception:  # defensive: chat must never break the pipeline
+                logger.warning("external chat_reply failed")
+        return None
+
+    def _rule_chat_reply(self, text: str) -> Optional[str]:
+        """Small local conversational rules for common non-command messages."""
+        lower = (text or "").lower().strip()
+        if not lower:
+            return None
+        if re.search(r"\b(hi|hello|hey|yo|howdy)\b", lower) and len(lower) < 40:
+            return "Hello! I'm Screen-AI, your local desktop operator. What can I help you with?"
+        if re.search(r"\b(how are you|how's it going|how do you do)\b", lower):
+            return "I'm running smoothly. What would you like me to do on your PC?"
+        if re.search(r"\b(who|what)\s+(are|is)\s+you\b", lower):
+            return "I'm Screen-AI — a local AI desktop operator that can open apps, browse, manage files, and more, all on your machine."
+        if re.search(r"\b(what can you do|what do you do|help me|capabilities|features)\b", lower):
+            return "I can open apps and websites, search the web, manage files, check system status, take screenshots, and more. Just tell me what you need."
+        if re.search(r"\b(thank you|thanks|thx|ty)\b", lower):
+            return "You're welcome! Let me know if you need anything else."
+        if re.search(r"\b(good\s*(morning|afternoon|evening)|good\s*night)\b", lower):
+            return "Hello! What can I help you with?"
+        return None
+
     async def preview_plan(self, text: str) -> Dict[str, Any]:
         """Return the planned interpretation of a command without executing it."""
+        try:
+            return await asyncio.wait_for(
+                self._preview_plan_impl(text),
+                timeout=25.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("preview_plan timed out for text=%r", text[:80])
+            return {
+                "status": "timeout",
+                "input": self.redactor.redact(text),
+                "intent": "unknown",
+                "risk_level": 0,
+                "requires_approval": False,
+                "plan": {},
+                "step_count": 0,
+                "execution_graph": {
+                    "nodes": [],
+                    "validation": {"ok": False, "errors": ["preview timed out"]},
+                    "node_count": 0,
+                    "approval_required": False,
+                },
+                "runtime": {},
+                "ssd_tier": {},
+                "model_plan": {},
+                "engines": {},
+                "message": "Preview timed out. Try a simpler command or restart the server.",
+            }
+        except Exception as e:
+            logger.exception("preview_plan failed: %s", e)
+            return {
+                "status": "failed",
+                "input": self.redactor.redact(text),
+                "intent": "unknown",
+                "risk_level": 0,
+                "requires_approval": False,
+                "plan": {},
+                "step_count": 0,
+                "execution_graph": {
+                    "nodes": [],
+                    "validation": {"ok": False, "errors": [str(e)]},
+                    "node_count": 0,
+                    "approval_required": False,
+                },
+                "runtime": {},
+                "ssd_tier": {},
+                "model_plan": {},
+                "engines": {},
+                "message": f"Preview failed: {e}",
+            }
+
+    async def _preview_plan_impl(self, text: str) -> Dict[str, Any]:
+        """Internal implementation of preview_plan with timeout protection."""
         budget = await asyncio.to_thread(self.resource_budget.measure)
         task_plan = self.task_planner.plan(text)
         intent = task_plan.intent if task_plan else await self.planner.classify_intent(text)
@@ -474,6 +663,12 @@ class AgentRouter:
             if llm_plan:
                 intent = llm_plan.get("intent", intent)
 
+        if intent == "unknown" and self.external_planner.is_configured():
+            external_plan = await self.external_planner.create_plan(text)
+            if external_plan:
+                llm_plan = external_plan
+                intent = external_plan.get("intent", intent)
+
         risk_level = await self.risk_classifier.assess(text, intent)
         if llm_plan:
             risk_level = max(risk_level, int(llm_plan.get("risk_level", 1)))
@@ -487,13 +682,12 @@ class AgentRouter:
             budget,
             self.heatmap.hot_models_for_intent(intent),
         )
-        plan = (
-            task_plan.to_dict()
-            if task_plan
-            else llm_plan or await self.planner.create_plan(text, intent)
-        )
-        steps = plan.get("steps", [])
-        execution_graph = self._build_execution_graph(plan, risk_level)
+        built = await self._build_cognitive_plan(text, intent, task_plan, llm_plan)
+        plan = built["plan"]
+        steps = built["steps"]
+        cognitive_plan = built["cognitive_plan"]
+        goal = self._derive_goal(text, intent)
+        execution_graph = self._build_execution_graph(plan, risk_level, goal=goal)
         return {
             "status": "planned" if steps else "unsupported",
             "input": self.redactor.redact(text),
@@ -502,7 +696,11 @@ class AgentRouter:
             "requires_approval": requires_approval,
             "plan": self.redactor.redact_dict(plan),
             "step_count": len(steps),
+            "goal": goal,
             "execution_graph": execution_graph,
+            "cognitive_plan": self.redactor.redact_dict(cognitive_plan)
+            if cognitive_plan
+            else {},
             "runtime": self.tier_manager.decide(
                 intent,
                 budget,
@@ -836,6 +1034,30 @@ class AgentRouter:
                 ),
             )
             await db.commit()
+
+    def _derive_goal(self, text: str, intent: str) -> str:
+        """Derive a short human-readable goal for the user's request.
+
+        Used by the graph's verify_goal node and surfaced in the response.
+        """
+        if not text or not text.strip():
+            return "complete the request"
+        # Prefer a capitalized/natural form of the raw command, trimmed to a
+        # single line; fall back to the intent name.
+        goal = " ".join(text.strip().split())
+        if len(goal) > 120:
+            goal = goal[:117].rstrip() + "..."
+        return goal or intent.replace("_", " ").title()
+
+    def _step_status(self, tool: str, args: Dict[str, Any]) -> str:
+        """Return a natural-language status line for a tool step."""
+        phrase = self.TOOL_STATUS_PHRASES.get(tool)
+        if phrase:
+            try:
+                return phrase.format(**{k: str(v) for k, v in args.items()})
+            except (KeyError, ValueError):
+                pass
+        return f"Running {tool}..."
 
     def _format_results(self, results: List[Dict[str, Any]]) -> str:
         """Format tool results into human-readable response."""

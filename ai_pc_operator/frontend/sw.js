@@ -6,7 +6,7 @@
  * Commands are saved as drafts only; they are never replayed automatically.
  * ================================================================ */
 
-const CACHE_VERSION = 'screenai-v7-plan-to-action';
+const CACHE_VERSION = 'screenai-v8-lab-approve-button';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const API_CACHE = `${CACHE_VERSION}-api`;
 const OFFLINE_URL = '/remote/offline.html';
