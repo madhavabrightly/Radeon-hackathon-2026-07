@@ -1,4 +1,6 @@
 # Screen-AI
+demo video
+https://drive.google.com/file/d/1WvqakA_qPcAKQae3T1FI90Yhym89vpM2/view?usp=sharing
 
 **A fully local/offline PC operator AI, controlled by your PC and phone.**
 
