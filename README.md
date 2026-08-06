@@ -270,6 +270,11 @@ node pipeline/test_pipeline.js
 - Emergency stop always works; all non-secret actions are logged.
 - This project automates the owner's own machine in a visible, approved session. It implements no stealth, bot-evasion, credential-theft, or hidden-control behavior.
 
+## Contributors
+
+- Nameera19
+- madhavabrightly
+
 ## License
 
 See the repository for license details. Contact: `madhavabrightly/Screen-AI`.
